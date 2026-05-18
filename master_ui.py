@@ -30,8 +30,9 @@ def verify_session(token: str) -> bool:
     return True
 
 # ================= ՍԵՐՎԵՐՆԵՐԻ ԿԱՐԳԱՎՈՐՈՒՄ =================
-CONFIG_FILE = Path("bot_servers.json")
-ACCOUNTS_FILE = Path("saved_accounts.json")
+CONFIG_FILE = Path("master_servers.json")
+ACCOUNTS_FILE = Path("master_saved_accounts.json")
+CACHED_RESULTS_FILE = Path("master_cached_results.json")  # NEW: պահել արդյունքները
 
 def load_servers():
     if CONFIG_FILE.exists():
@@ -59,29 +60,84 @@ def save_accounts(server: str, accounts: str):
     with open(ACCOUNTS_FILE, "w") as f:
         json.dump(data, f)
 
+def load_cached_results() -> Dict[str, Dict]:
+    """Պահպանված արդյունքները ըստ username-ի"""
+    if CACHED_RESULTS_FILE.exists():
+        with open(CACHED_RESULTS_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_cached_results(results: Dict[str, Dict]):
+    with open(CACHED_RESULTS_FILE, "w") as f:
+        json.dump(results, f, indent=2)
+
 BOT_SERVERS = load_servers()
 # ====================================================
 
 app = FastAPI(title="Master UI - Multi Bot Aggregator")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-async def fetch_all_results() -> List[Dict]:
-    all_accounts = []
+# ================= MERGE RESULTS LOGIC =================
+# Պահպանում ենք բոլոր ժամանակների արդյունքները
+cached_results: Dict[str, Dict] = load_cached_results()  # key = username
+
+async def fetch_and_merge_results() -> List[Dict]:
+    """Ստանում է արդյունքները սերվերներից և միացնում (merge) գոյություն ունեցողների հետ"""
+    global cached_results
+    
     async with httpx.AsyncClient(timeout=10) as client:
         for server in BOT_SERVERS:
             try:
                 res = await client.get(f"{server}/results")
                 if res.status_code == 200:
                     data = res.json()
-                    all_accounts.extend(data)
-                    print(f"✅ Fetched {len(data)} accounts from {server}")
+                    for account in data:
+                        username = account.get("username")
+                        if username:
+                            # Եթե աքաունթն արդեն կա, թարմացնում ենք բալանսը և ստատուսը
+                            if username in cached_results:
+                                old = cached_results[username]
+                                # Թարմացնում ենք միայն փոփոխվող դաշտերը
+                                old["balance"] = account.get("balance", old.get("balance", "0 ֏"))
+                                old["balance_value"] = account.get("balance_value", old.get("balance_value", 0.0))
+                                old["status"] = account.get("status", old.get("status", "❌"))
+                                old["error"] = account.get("error", old.get("error", ""))
+                                old["timestamp"] = account.get("timestamp", old.get("timestamp", datetime.now().isoformat()))
+                                # username-ն ու password-ը չեն փոխվում
+                            else:
+                                # Նոր աքաունթ - ավելացնում ենք
+                                cached_results[username] = account.copy()
+                    print(f"✅ Fetched/merged {len(data)} accounts from {server}")
             except Exception as e:
                 print(f"❌ Error fetching from {server}: {e}")
-    return all_accounts
+    
+    # Պահպանել քեշը
+    save_cached_results(cached_results)
+    
+    # Վերադարձնել որպես ցուցակ
+    return list(cached_results.values())
 
 @app.get("/results")
 async def get_merged_results():
-    return await fetch_all_results()
+    return await fetch_and_merge_results()
+
+@app.post("/results/clear")
+async def clear_all_results():
+    """Մաքրել բոլոր պահպանված արդյունքները"""
+    global cached_results
+    cached_results = {}
+    save_cached_results({})
+    return {"success": True, "message": "All results cleared"}
+
+@app.post("/results/clear/{username}")
+async def clear_single_result(username: str):
+    """Մաքրել կոնկրետ աքաունթի արդյունքը"""
+    global cached_results
+    if username in cached_results:
+        del cached_results[username]
+        save_cached_results(cached_results)
+        return {"success": True, "message": f"Removed {username}"}
+    return {"success": False, "message": "Account not found"}
 
 @app.get("/health")
 async def health():
@@ -239,8 +295,12 @@ HTML_UI = '''<!DOCTYPE html>
         .stat-card:hover { border-color: #58a6ff; background: #1a1f2e; transform: translateY(-2px); }
         .stat-number { font-size: 22px; font-weight: 700; color: #58a6ff; }
         .stat-label { font-size: 10px; color: #8b949e; margin-top: 3px; }
+        
+        .clear-all-btn { background: #da3633; border: none; border-radius: 30px; padding: 5px 12px; color: white; cursor: pointer; font-size: 11px; margin-left: 10px; }
+        .clear-all-btn:hover { background: #f85149; }
+        
         .results-section { background: #161b22; border-radius: 20px; border: 1px solid #30363d; overflow: hidden; margin-bottom: 20px; }
-        .section-header { padding: 14px 20px; background: #0d1117; border-bottom: 1px solid #30363d; font-weight: 600; font-size: 15px; }
+        .section-header { padding: 14px 20px; background: #0d1117; border-bottom: 1px solid #30363d; font-weight: 600; font-size: 15px; display: flex; justify-content: space-between; align-items: center; }
         .filter-bar { display: flex; gap: 10px; padding: 12px 20px; background: #0d1117; border-bottom: 1px solid #21262d; flex-wrap: wrap; align-items: center; }
         .search-input { padding: 6px 14px; background: #010409; border: 1px solid #30363d; border-radius: 30px; color: white; width: 220px; font-size: 12px; }
         .filter-btn { padding: 5px 14px; background: #21262d; border: none; border-radius: 30px; color: #8b949e; cursor: pointer; font-size: 11px; transition: all 0.2s; }
@@ -257,11 +317,13 @@ HTML_UI = '''<!DOCTYPE html>
         .balance-positive { color: #3fb950; font-weight: 600; }
         .balance-medium { color: #d29922; font-weight: 600; }
         .balance-zero { color: #f85149; }
-        .copy-btn, .retry-btn { background: transparent; border: none; cursor: pointer; font-size: 11px; padding: 3px 8px; border-radius: 6px; transition: all 0.2s; }
+        .copy-btn, .retry-btn, .delete-row-btn { background: transparent; border: none; cursor: pointer; font-size: 11px; padding: 3px 8px; border-radius: 6px; transition: all 0.2s; }
         .copy-btn { color: #58a6ff; }
         .copy-btn:hover { background: #30363d; color: #3fb950; }
         .retry-btn { color: #d29922; }
         .retry-btn:hover { background: #30363d; color: #f0883e; }
+        .delete-row-btn { color: #f85149; }
+        .delete-row-btn:hover { background: #30363d; color: #ff6b6b; }
         .username-cell, .password-cell { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
         .error-cell { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
         .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -313,6 +375,8 @@ HTML_UI = '''<!DOCTYPE html>
         .btn-primary:hover { transform: translateY(-1px); }
         .btn-secondary { background: #6e7681; color: white; }
         .btn-secondary:hover { background: #8b949e; transform: translateY(-1px); }
+        .btn-danger { background: #da3633; color: white; }
+        .btn-danger:hover { background: #f85149; transform: translateY(-1px); }
         
         .auto-refresh { position: fixed; bottom: 20px; right: 20px; background: #161b22; padding: 6px 12px; border-radius: 20px; font-size: 10px; border: 1px solid #30363d; }
         ::-webkit-scrollbar { width: 6px; }
@@ -346,7 +410,7 @@ HTML_UI = '''<!DOCTYPE html>
 <div class="container">
     <div class="header">
         <h1><i class="fas fa-network-wired"></i> MASTER UI | Multi Bot Aggregator</h1>
-        <div class="header-sub">📡 Հավաքում է բոլոր bot-երի արդյունքները մեկ տեղում</div>
+        <div class="header-sub">📡 Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ | Թարմացվում է միայն բալանսը</div>
     </div>
 
     <div class="stats-top">
@@ -357,7 +421,10 @@ HTML_UI = '''<!DOCTYPE html>
     </div>
 
     <div class="results-section">
-        <div class="section-header"><i class="fas fa-chart-line"></i> Results Dashboard</div>
+        <div class="section-header">
+            <span><i class="fas fa-chart-line"></i> Results Dashboard</span>
+            <button class="clear-all-btn" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button>
+        </div>
         <div class="filter-bar">
             <input type="text" id="searchInput" class="search-input" placeholder="🔍 Search username...">
             <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">All</button>
@@ -375,8 +442,18 @@ HTML_UI = '''<!DOCTYPE html>
         </div>
         <div class="table-container">
             <table id="resultsTable">
-                <thead><tr><th onclick="sortBy('status')"><i class="fas fa-flag"></i> Status</th><th onclick="sortBy('username')"><i class="fas fa-user"></i> Username</th><th onclick="sortBy('password')"><i class="fas fa-key"></i> Password</th><th onclick="sortBy('balance')"><i class="fas fa-coins"></i> Balance</th><th><i class="fas fa-cogs"></i> Action</th></tr></thead>
-                <tbody id="resultsBody"><tr><td colspan="5" style="text-align:center; padding:40px;"><i class="fas fa-spinner fa-pulse"></i> Loading...</td></tr></tbody>
+                <thead>
+                    <tr>
+                        <th onclick="sortBy('status')"><i class="fas fa-flag"></i> Status</th>
+                        <th onclick="sortBy('username')"><i class="fas fa-user"></i> Username</th>
+                        <th onclick="sortBy('password')"><i class="fas fa-key"></i> Password</th>
+                        <th onclick="sortBy('balance')"><i class="fas fa-coins"></i> Balance</th>
+                        <th><i class="fas fa-cogs"></i> Action</th>
+                    </tr>
+                </thead>
+                <tbody id="resultsBody">
+                    <tr><td colspan="5" style="text-align:center; padding:40px;"><i class="fas fa-spinner fa-pulse"></i> Loading...</td></tr>
+                </tbody>
             </table>
         </div>
     </div>
@@ -394,6 +471,7 @@ HTML_UI = '''<!DOCTYPE html>
             </div>
             <div class="button-group">
                 <button class="btn btn-secondary" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh All</button>
+                <button class="btn btn-danger" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button>
                 <button class="btn btn-secondary" onclick="clearTerminal()"><i class="fas fa-trash"></i> Clear Terminal</button>
             </div>
         </div>
@@ -403,16 +481,16 @@ HTML_UI = '''<!DOCTYPE html>
                 <button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button>
             </div>
             <div class="terminal" id="terminal">
-                <div class="terminal-line"><span class="time">●</span> 🚀 MASTER UI v2.0</div>
-                <div class="terminal-line"><span class="time">●</span> 📡 Auto-refresh every 5 seconds</div>
-                <div class="terminal-line"><span class="time">●</span> 💡 Start = Save accounts & Run</div>
-                <div class="terminal-line"><span class="time">●</span> 💡 Restart = Stop + Reset + Start (same accounts)</div>
+                <div class="terminal-line"><span class="time">●</span> 🚀 MASTER UI v3.0 (PERSISTENT RESULTS)</div>
+                <div class="terminal-line"><span class="time">●</span> 📡 Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ նոր ցիկլերի ժամանակ</div>
+                <div class="terminal-line"><span class="time">●</span> 💡 Թարմացվում է միայն բալանսը և ստատուսը</div>
+                <div class="terminal-line"><span class="time">●</span> 🗑 Clear All Results - մաքրում է բոլոր արդյունքները</div>
             </div>
         </div>
     </div>
 </div>
 </div>
-<div class="auto-refresh"><i class="fas fa-clock"></i> Auto-refresh: 5s</div>
+<div class="auto-refresh"><i class="fas fa-clock"></i> Auto-refresh: 5s | Results PERSISTENT</div>
 
 <script>
 let allResults = [], currentFilter = 'all', currentBalanceFilter = 'all', currentSort = { field: 'balance', dir: 'desc' };
@@ -680,6 +758,32 @@ async function saveServers() {
     } catch(e) { addLog(`❌ Error saving servers: ${e.message}`); }
 }
 
+async function clearAllResults() {
+    if (confirm('⚠️ Are you sure you want to DELETE ALL results? This cannot be undone!')) {
+        try {
+            const res = await fetch('/results/clear', { method: 'POST' });
+            if (res.ok) {
+                allResults = [];
+                renderResults();
+                updateStats();
+                addLog('🗑 All results cleared');
+            }
+        } catch(e) { addLog(`❌ Error clearing results: ${e.message}`); }
+    }
+}
+
+async function deleteSingleResult(username) {
+    if (confirm(`Delete ${username} from results?`)) {
+        try {
+            const res = await fetch(`/results/clear/${encodeURIComponent(username)}`, { method: 'POST' });
+            if (res.ok) {
+                await loadResults();
+                addLog(`🗑 Removed ${username} from results`);
+            }
+        } catch(e) { addLog(`❌ Error deleting: ${e.message}`); }
+    }
+}
+
 async function loadResults() {
     try {
         const res = await fetch('/results');
@@ -687,6 +791,7 @@ async function loadResults() {
             allResults = await res.json();
             renderResults();
             updateStats();
+            addLog(`🔄 Loaded ${allResults.length} total accounts (persistent)`);
         }
     } catch(e) { addLog(`❌ Error fetching results: ${e.message}`); }
 }
@@ -721,9 +826,13 @@ function renderResults() {
             <td><div class="username-cell"><strong style="color:#58a6ff">${escapeHtml(r.username)}</strong><button class="copy-btn" onclick="copyToClipboard('${escapeHtml(r.username)}', this)"><i class="fas fa-copy"></i></button></div></td>
             <td><div class="password-cell">${escapeHtml(r.password)}<button class="copy-btn" onclick="copyToClipboard('${escapeHtml(r.password)}', this)"><i class="fas fa-key"></i></button></div></td>
             <td class="${balanceClass(r.balance_value)}">${r.balance||'0 ֏'}</td>
-            <td class="error-cell">${escapeHtml(r.error||'-')}<button class="retry-btn" onclick="retryAccount('${escapeHtml(r.username)}', this)"><i class="fas fa-sync-alt"></i> Retry</button></td>
+            <td class="error-cell">
+                ${escapeHtml(r.error||'-')}
+                <button class="retry-btn" onclick="retryAccount('${escapeHtml(r.username)}', this)"><i class="fas fa-sync-alt"></i> Retry</button>
+                <button class="delete-row-btn" onclick="deleteSingleResult('${escapeHtml(r.username)}')"><i class="fas fa-trash"></i></button>
+            </td>
         </tr>`).join('');
-    if (filtered.length === 0 && allResults.length > 0) document.getElementById('resultsBody').innerHTML = '<td><td colspan="5" style="text-align:center; padding:40px;">No matching results</td></tr>';
+    if (filtered.length === 0 && allResults.length > 0) document.getElementById('resultsBody').innerHTML = '<tr><td colspan="5" style="text-align:center; padding:40px;">No matching results</td></tr>';
 }
 
 function updateStats() {
@@ -772,15 +881,15 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     print("\n" + "=" * 60)
-    print("🖥️  MASTER UI - Multi Bot Aggregator v2.0")
+    print("🖥️  MASTER UI - Multi Bot Aggregator v3.0 (PERSISTENT RESULTS)")
     print("=" * 60)
     print(f"📍 Master UI: http://localhost:9000")
     print(f"🔐 Master PIN: {MASTER_PIN}")
     print("=" * 60)
-    print("📌 Instructions:")
-    print("   1. Add your bot servers (e.g., http://localhost:8000)")
-    print("   2. Click Start and enter accounts (username:password)")
-    print("   3. Use Restart to run same accounts again")
-    print("   4. Stop to pause the bot")
+    print("📌 NEW FEATURES:")
+    print("   ✅ Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ - չեն կորչում նոր ցիկլի ժամանակ")
+    print("   ✅ Թարմացվում է միայն բալանսը և ստատուսը")
+    print("   ✅ Clear All Results - մաքրել բոլոր արդյունքները")
+    print("   ✅ Delete Row - ջնջել կոնկրետ աքաունթ")
     print("=" * 60 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
