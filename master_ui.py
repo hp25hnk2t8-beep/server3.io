@@ -16,8 +16,8 @@ MOBILE_PIN = "1111"
 # ====================================================
 
 # ================= TELEGRAM ԿԱՐԳԱՎՈՐՈՒՄ =================
-TELEGRAM_BOT_TOKEN = "8856388951:AAEiVCzel84U1qL21OohWzbLrdSeiWeZF2Y"
-TELEGRAM_CHAT_ID = "8707669446"
+TELEGRAM_BOT_TOKEN = "8856388951:AAEiVCzel84U1qL21OohWzbLrdSeiWeZF2Y"  # ← ԱՅՍՏԵՂ ՏԵԼԵԳՐԱՄԻ ԲՈՏԻ ԹՈՔԵՆԸ
+TELEGRAM_CHAT_ID = "8707669446"      # ← ԱՅՍՏԵՂ ՉԵԹԻ ID-ն
 # ====================================================
 
 # ================= ՍԵՍԻԱՆԵՐԻ ԿԱՌԱՎԱՐՈՒՄ =================
@@ -74,6 +74,7 @@ def load_cached_results() -> Dict[str, Dict]:
     return {}
 
 def save_cached_results(results: Dict[str, Dict]):
+    # Ensure balance_value is number
     for k, v in results.items():
         if "balance_value" not in v or not isinstance(v["balance_value"], (int, float)):
             v["balance_value"] = 0.0
@@ -88,21 +89,23 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 # ================= TELEGRAM SENDER =================
 async def send_telegram_message(text: str):
+    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or TELEGRAM_CHAT_ID == "YOUR_CHAT_ID_HERE":
+        print("⚠️ Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+        return
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"})
-            print(f"✅ Telegram sent: {text[:50]}...")
+            print("✅ Timeout report sent to Telegram")
     except Exception as e:
         print(f"❌ Failed to send Telegram message: {e}")
 
 # ================= MERGE RESULTS LOGIC =================
 cached_results: Dict[str, Dict] = load_cached_results()
 last_timeout_report_time = None
-sent_problems = set()  # Track which problems have been sent
 
 async def fetch_and_merge_results() -> List[Dict]:
-    global cached_results, last_timeout_report_time, sent_problems
+    global cached_results, last_timeout_report_time
     
     async with httpx.AsyncClient(timeout=10) as client:
         for server in BOT_SERVERS:
@@ -113,6 +116,7 @@ async def fetch_and_merge_results() -> List[Dict]:
                     for account in data:
                         username = account.get("username")
                         if username:
+                            # Ensure balance_value is float
                             balance_val = account.get("balance_value")
                             if balance_val is None:
                                 balance_val = 0.0
@@ -137,34 +141,28 @@ async def fetch_and_merge_results() -> List[Dict]:
             except Exception as e:
                 print(f"❌ Error fetching from {server}: {e}")
     
-    # Check for timeouts and send Telegram report - EACH ACCOUNT SEPARATELY
+    # Check for timeouts and send Telegram report (every 5 minutes max)
     now = datetime.now()
     if last_timeout_report_time is None or (now - last_timeout_report_time).seconds > 300:
-        problem_accounts = []
+        timeout_accounts = []
+        failed_accounts = []
         for username, acc in cached_results.items():
             status = acc.get("status", "")
-            password = acc.get("password", "")
-            if status == "⏰" or status == "❌":
-                problem_key = f"{username}:{password}"
-                if problem_key not in sent_problems:
-                    problem_accounts.append((username, password, status))
-                    sent_problems.add(problem_key)
+            if status == "⏰":
+                timeout_accounts.append(f"• {username} - {acc.get('error', 'Timeout')}")
+            elif status == "❌":
+                failed_accounts.append(f"• {username} - {acc.get('error', 'Failed')}")
         
-        # Send each problem account as separate message
-        for username, password, status in problem_accounts:
-            emoji = "⏰" if status == "⏰" else "❌"
-            msg = f"{emoji} <code>{username}:{password}</code>"
+        if timeout_accounts or failed_accounts:
+            msg = "<b>🚨 MASTER UI - Problem Accounts Report</b>\n\n"
+            if timeout_accounts:
+                msg += f"<b>⏰ Timeout ({len(timeout_accounts)}):</b>\n" + "\n".join(timeout_accounts[:20]) + "\n\n"
+            if failed_accounts:
+                msg += f"<b>❌ Failed ({len(failed_accounts)}):</b>\n" + "\n".join(failed_accounts[:20])
+            if len(msg) > 4000:
+                msg = msg[:4000] + "...\n(truncated)"
             await send_telegram_message(msg)
-            await asyncio.sleep(0.3)  # Small delay to avoid rate limiting
-        
-        if problem_accounts:
-            print(f"📱 Sent {len(problem_accounts)} problem accounts to Telegram")
-        
-        # Clean old sent_problems (keep last 1000)
-        if len(sent_problems) > 1000:
-            sent_problems = set(list(sent_problems)[-500:])
-        
-        last_timeout_report_time = now
+            last_timeout_report_time = now
     
     save_cached_results(cached_results)
     return list(cached_results.values())
@@ -175,9 +173,8 @@ async def get_merged_results():
 
 @app.post("/results/clear")
 async def clear_all_results():
-    global cached_results, sent_problems
+    global cached_results
     cached_results = {}
-    sent_problems = set()
     save_cached_results({})
     return {"success": True, "message": "All results cleared"}
 
@@ -413,7 +410,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         .balance-zero { color: #f85149; }
         .copy-btn { background: transparent; border: none; color: #58a6ff; cursor: pointer; padding: 2px 5px; border-radius: 4px; font-size: 10px; }
         .pin-star { background: transparent; border: none; color: #d29922; cursor: pointer; padding: 2px 5px; font-size: 12px; transition: transform 0.1s; }
-        .pin-star.active { color: #3fb950; text-shadow: 0 0 3px #3fb950; }
+        .pin-star.active { color: #f0883e; text-shadow: 0 0 3px #f0883e; }
         .footer { text-align: center; padding: 12px; font-size: 9px; color: #6e7681; border-top: 1px solid #21262d; margin-top: 12px; }
         @media (max-width: 600px) { .stats-grid { grid-template-columns: repeat(3, 1fr); } }
     </style>
@@ -459,6 +456,7 @@ function renderTable(){
     let filtered=dashResults;
     let search=document.getElementById('dashSearch')?.value.toLowerCase()||'';
     if(search)filtered=filtered.filter(r=>r.username.toLowerCase().includes(search));
+    // Pinned first, then sort
     filtered.sort((a,b)=>{
         let aPinned = isPinned(a.username) ? 0 : 1;
         let bPinned = isPinned(b.username) ? 0 : 1;
@@ -469,7 +467,7 @@ function renderTable(){
         return currentSort.dir==='asc'?(av>bv?1:-1):(av<bv?1:-1);
     });
     let balanceClass=(v)=>{let n=parseFloat(v)||0;return n>100?'balance-positive':n>10?'balance-medium':'balance-zero';};
-    document.getElementById('dashTableBody').innerHTML=filtered.map(r=>`<tr><td><button class="pin-star ${isPinned(r.username)?'active':''}" onclick="togglePin('${escapeHtml(r.username)}')"><i class="fas fa-star"></i></button></td><td style="font-size:16px">${r.status}</td></td><strong style="color:#58a6ff">${escapeHtml(r.username)}</strong><button class="copy-btn" onclick="copyToClipboard('${escapeHtml(r.username)}')"><i class="fas fa-copy"></i></button></td><td class="${balanceClass(r.balance_value)}">${r.balance||'0 ֏'}</td></tr>`).join('');
+    document.getElementById('dashTableBody').innerHTML=filtered.map(r=>`<tr><td><button class="pin-star ${isPinned(r.username)?'active':''}" onclick="togglePin('${escapeHtml(r.username)}')"><i class="fas fa-star"></i></button></td><td style="font-size:16px">${r.status}</td><td><strong style="color:#58a6ff">${escapeHtml(r.username)}</strong><button class="copy-btn" onclick="copyToClipboard('${escapeHtml(r.username)}')"><i class="fas fa-copy"></i></button></td><td class="${balanceClass(r.balance_value)}">${r.balance||'0 ֏'}</td></tr>`).join('');
 }
 function updateStats(){
     let totalBalance = dashResults.reduce((sum,r)=> sum + (parseFloat(r.balance_value)||0),0);
@@ -686,6 +684,7 @@ function renderResults(){
     let f=allResults.filter(r=>{if(currentFilter!=='all'){if(currentFilter==='success'&&r.status!=='✅')return false;if(currentFilter==='failed'&&r.status!=='❌')return false;if(currentFilter==='timeout'&&r.status!=='⏰')return false;}if(currentBalanceFilter!=='all'){let n=parseFloat(r.balance_value)||0;if(currentBalanceFilter==='low'&&n>=10)return false;if(currentBalanceFilter==='mid'&&(n<10||n>100))return false;if(currentBalanceFilter==='high'&&n<=100)return false;}return true;});
     let s=document.getElementById('searchInput')?.value.toLowerCase()||'';
     if(s)f=f.filter(r=>r.username.toLowerCase().includes(s));
+    // Sort: pinned first, then by current sort
     f.sort((a,b)=>{
         let aPinned = isPinned(a.username) ? 0 : 1;
         let bPinned = isPinned(b.username) ? 0 : 1;
@@ -696,7 +695,7 @@ function renderResults(){
         return currentSort.dir==='asc'?(av>bv?1:-1):(av<bv?1:-1);
     });
     let bc=v=>{let n=parseFloat(v)||0;return n>100?'balance-positive':n>10?'balance-medium':'balance-zero';};
-    document.getElementById('resultsBody').innerHTML=f.map(r=>`<tr><td><button class="pin-star-btn ${isPinned(r.username)?'active':''}" onclick="togglePin('${escapeHtml(r.username)}')"><i class="fas fa-star"></i></button></td><td style="font-size:18px">${r.status}</td></td><div class="username-cell"><strong style="color:#58a6ff">${escapeHtml(r.username)}</strong><button class="copy-btn" onclick="copyToClipboard('${escapeHtml(r.username)}',this)"><i class="fas fa-copy"></i></button></div></td></td><div class="password-cell">${escapeHtml(r.password)}<button class="copy-btn" onclick="copyToClipboard('${escapeHtml(r.password)}',this)"><i class="fas fa-key"></i></button></div></td><td class="${bc(r.balance_value)}">${r.balance||'0 ֏'}</td><td class="error-cell">${escapeHtml(r.error||'-')}<button class="retry-btn" onclick="retryAccount('${escapeHtml(r.username)}',this)"><i class="fas fa-sync-alt"></i> Retry</button><button class="delete-row-btn" onclick="deleteSingleResult('${escapeHtml(r.username)}')"><i class="fas fa-trash"></i></button></td></tr>`).join('');
+    document.getElementById('resultsBody').innerHTML=f.map(r=>`<tr><td><button class="pin-star-btn ${isPinned(r.username)?'active':''}" onclick="togglePin('${escapeHtml(r.username)}')"><i class="fas fa-star"></i></button></td><td style="font-size:18px">${r.status}</td><td><div class="username-cell"><strong style="color:#58a6ff">${escapeHtml(r.username)}</strong><button class="copy-btn" onclick="copyToClipboard('${escapeHtml(r.username)}',this)"><i class="fas fa-copy"></i></button></div></td><td><div class="password-cell">${escapeHtml(r.password)}<button class="copy-btn" onclick="copyToClipboard('${escapeHtml(r.password)}',this)"><i class="fas fa-key"></i></button></div></td><td class="${bc(r.balance_value)}">${r.balance||'0 ֏'}</td><td class="error-cell">${escapeHtml(r.error||'-')}<button class="retry-btn" onclick="retryAccount('${escapeHtml(r.username)}',this)"><i class="fas fa-sync-alt"></i> Retry</button><button class="delete-row-btn" onclick="deleteSingleResult('${escapeHtml(r.username)}')"><i class="fas fa-trash"></i></button></td></tr>`).join('');
     if(f.length===0&&allResults.length>0)document.getElementById('resultsBody').innerHTML='<tr><td colspan="6" style="text-align:center; padding:40px;">No matching results</td></tr>';
 }
 function updateStats(){
@@ -751,7 +750,7 @@ if __name__ == "__main__":
     print("📌 NEW FEATURES:")
     print("   ⭐ Pin (Star) - click ⭐ to pin accounts on top (saved in browser)")
     print("   💰 Total Balance - shows sum of all balances")
-    print("   📱 Telegram Auto-Report - sends EACH problem account SEPARATELY (FORMAT: ⏰ USER:PASSWORD)")
+    print("   📱 Telegram Auto-Report - sends timeouts every 5 min")
     print("   ✅ Persistent results + bug fixes")
     print("=" * 60 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
