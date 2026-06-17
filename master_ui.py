@@ -15,11 +15,6 @@ DASHBOARD_PIN = "0000"
 MOBILE_PIN = "1111"
 # ====================================================
 
-# ================= TELEGRAM ԿԱՐԳԱՎՈՐՈՒՄ =================
-TELEGRAM_BOT_TOKEN = "8856388951:AAEiVCzel84U1qL21OohWzbLrdSeiWeZF2Y"  # ← ԱՅՍՏԵՂ ՏԵԼԵԳՐԱՄԻ ԲՈՏԻ ԹՈՔԵՆԸ
-TELEGRAM_CHAT_ID = "8707669446"      # ← ԱՅՍՏԵՂ ՉԵԹԻ ID-ն
-# ====================================================
-
 # ================= ՍԵՍԻԱՆԵՐԻ ԿԱՌԱՎԱՐՈՒՄ =================
 sessions = {}
 
@@ -35,6 +30,31 @@ def verify_session(token: str) -> bool:
         del sessions[token]
         return False
     return True
+
+# ================= ONLINE USERS =================
+online_users = {}
+last_activity = {}
+
+def update_user_activity(token: str):
+    if token:
+        online_users[token] = datetime.now()
+        last_activity[token] = datetime.now()
+
+def cleanup_inactive_users():
+    now = datetime.now()
+    to_remove = []
+    for token, last in list(last_activity.items()):
+        if (now - last).seconds > 30:
+            to_remove.append(token)
+    for token in to_remove:
+        if token in online_users:
+            del online_users[token]
+        if token in last_activity:
+            del last_activity[token]
+
+def get_online_count():
+    cleanup_inactive_users()
+    return len(online_users)
 
 # ================= ՍԵՐՎԵՐՆԵՐԻ ԿԱՐԳԱՎՈՐՈՒՄ =================
 CONFIG_FILE = Path("master_servers.json")
@@ -74,7 +94,6 @@ def load_cached_results() -> Dict[str, Dict]:
     return {}
 
 def save_cached_results(results: Dict[str, Dict]):
-    # Ensure balance_value is number
     for k, v in results.items():
         if "balance_value" not in v or not isinstance(v["balance_value"], (int, float)):
             v["balance_value"] = 0.0
@@ -87,25 +106,11 @@ BOT_SERVERS = load_servers()
 app = FastAPI(title="Master UI - Multi Bot Aggregator")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ================= TELEGRAM SENDER =================
-async def send_telegram_message(text: str):
-    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or TELEGRAM_CHAT_ID == "YOUR_CHAT_ID_HERE":
-        print("⚠️ Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
-        return
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"})
-            print("✅ Timeout report sent to Telegram")
-    except Exception as e:
-        print(f"❌ Failed to send Telegram message: {e}")
-
 # ================= MERGE RESULTS LOGIC =================
 cached_results: Dict[str, Dict] = load_cached_results()
-last_timeout_report_time = None
 
 async def fetch_and_merge_results() -> List[Dict]:
-    global cached_results, last_timeout_report_time
+    global cached_results
     
     async with httpx.AsyncClient(timeout=10) as client:
         for server in BOT_SERVERS:
@@ -116,7 +121,6 @@ async def fetch_and_merge_results() -> List[Dict]:
                     for account in data:
                         username = account.get("username")
                         if username:
-                            # Ensure balance_value is float
                             balance_val = account.get("balance_value")
                             if balance_val is None:
                                 balance_val = 0.0
@@ -140,29 +144,6 @@ async def fetch_and_merge_results() -> List[Dict]:
                     print(f"✅ Fetched/merged {len(data)} accounts from {server}")
             except Exception as e:
                 print(f"❌ Error fetching from {server}: {e}")
-    
-    # Check for timeouts and send Telegram report (every 5 minutes max)
-    now = datetime.now()
-    if last_timeout_report_time is None or (now - last_timeout_report_time).seconds > 300:
-        timeout_accounts = []
-        failed_accounts = []
-        for username, acc in cached_results.items():
-            status = acc.get("status", "")
-            if status == "⏰":
-                timeout_accounts.append(f"• {username} - {acc.get('error', 'Timeout')}")
-            elif status == "❌":
-                failed_accounts.append(f"• {username} - {acc.get('error', 'Failed')}")
-        
-        if timeout_accounts or failed_accounts:
-            msg = "<b>🚨 MASTER UI - Problem Accounts Report</b>\n\n"
-            if timeout_accounts:
-                msg += f"<b>⏰ Timeout ({len(timeout_accounts)}):</b>\n" + "\n".join(timeout_accounts[:20]) + "\n\n"
-            if failed_accounts:
-                msg += f"<b>❌ Failed ({len(failed_accounts)}):</b>\n" + "\n".join(failed_accounts[:20])
-            if len(msg) > 4000:
-                msg = msg[:4000] + "...\n(truncated)"
-            await send_telegram_message(msg)
-            last_timeout_report_time = now
     
     save_cached_results(cached_results)
     return list(cached_results.values())
@@ -313,6 +294,12 @@ async def check_session(token: str = None):
         return {"authenticated": True}
     return {"authenticated": False}
 
+@app.get("/api/online")
+async def get_online_count_endpoint(token: str = None):
+    if token:
+        update_user_activity(token)
+    return {"online": get_online_count()}
+
 # ================= DASHBOARD & MOBILE VERIFICATION =================
 dashboard_sessions = {}
 mobile_sessions = {}
@@ -412,6 +399,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         .pin-star { background: transparent; border: none; color: #d29922; cursor: pointer; padding: 2px 5px; font-size: 12px; transition: transform 0.1s; }
         .pin-star.active { color: #f0883e; text-shadow: 0 0 3px #f0883e; }
         .footer { text-align: center; padding: 12px; font-size: 9px; color: #6e7681; border-top: 1px solid #21262d; margin-top: 12px; }
+        .online-badge { background: transparent; padding: 2px 10px; border-radius: 20px; font-size: 10px; color: #58a6ff; }
         @media (max-width: 600px) { .stats-grid { grid-template-columns: repeat(3, 1fr); } }
     </style>
 </head>
@@ -431,7 +419,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
         <div class="stat-card"><div class="stat-number balance-total" id="dashTotalBalance">0</div><div class="stat-label">💰 TOTAL BALANCE</div></div>
     </div>
     <div class="results-card">
-        <div class="card-header"><span><i class="fas fa-table"></i> Results</span><div><input type="text" id="dashSearch" class="search-input" placeholder="Search..."><button class="refresh-btn" onclick="loadResults()"><i class="fas fa-sync-alt"></i></button></div></div>
+        <div class="card-header"><span><i class="fas fa-table"></i> Results <span class="online-badge" id="onlineUsers">👤 0</span></span><div><input type="text" id="dashSearch" class="search-input" placeholder="Search..."><button class="refresh-btn" onclick="loadResults()"><i class="fas fa-sync-alt"></i></button></div></div>
         <div class="table-container"><table id="dashTable"><thead><tr><th>⭐</th><th onclick="sortBy('status')">Status</th><th onclick="sortBy('username')">Username</th><th onclick="sortBy('balance')">Balance</th></tr></thead><tbody id="dashTableBody"><tr><td colspan="4" style="text-align:center; padding:30px;">Loading...</td></tr></tbody></table></div>
     </div>
     <div class="footer"><i class="fas fa-sync-alt"></i> Auto-refresh 5s</div>
@@ -450,13 +438,13 @@ function togglePin(username) {
 }
 function isPinned(username) { return pinnedAccounts.includes(username); }
 
-async function verifyPin(){let pin=document.getElementById('pinInput').value;if(!pin){document.getElementById('pinError').innerText='Enter PIN';return;}try{let res=await fetch('/dashboard/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:pin})});let data=await res.json();if(data.success){authToken=data.token;localStorage.setItem('dashboard_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('dashboard').style.display='block';loadResults();refreshInterval=setInterval(loadResults,5000);}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
+async function verifyPin(){let pin=document.getElementById('pinInput').value;if(!pin){document.getElementById('pinError').innerText='Enter PIN';return;}try{let res=await fetch('/dashboard/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:pin})});let data=await res.json();if(data.success){authToken=data.token;localStorage.setItem('dashboard_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('dashboard').style.display='block';loadResults();refreshInterval=setInterval(()=>{loadResults();updateOnline();},5000);updateOnline();}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
+async function updateOnline(){try{let res=await fetch(`/api/online?token=${authToken}`);let data=await res.json();document.getElementById('onlineUsers').innerHTML='👤 '+data.online;}catch(e){}}
 async function loadResults(){try{let res=await fetch('/results');if(res.ok){dashResults=await res.json();renderTable();updateStats();}}catch(e){}}
 function renderTable(){
     let filtered=dashResults;
     let search=document.getElementById('dashSearch')?.value.toLowerCase()||'';
     if(search)filtered=filtered.filter(r=>r.username.toLowerCase().includes(search));
-    // Pinned first, then sort
     filtered.sort((a,b)=>{
         let aPinned = isPinned(a.username) ? 0 : 1;
         let bPinned = isPinned(b.username) ? 0 : 1;
@@ -481,12 +469,12 @@ function sortBy(field){if(currentSort.field===field)currentSort.dir=currentSort.
 function copyToClipboard(text){navigator.clipboard.writeText(text);}
 function escapeHtml(s){if(!s)return '';return s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]);}
 document.getElementById('dashSearch').addEventListener('input',()=>renderTable());
-(async()=>{let savedToken=localStorage.getItem('dashboard_token');if(savedToken){try{let res=await fetch(`/dashboard/check?token=${savedToken}`);let data=await res.json();if(data.authenticated){authToken=savedToken;document.getElementById('pinOverlay').style.display='none';document.getElementById('dashboard').style.display='block';loadResults();refreshInterval=setInterval(loadResults,5000);}}catch(e){}}})();
+(async()=>{let savedToken=localStorage.getItem('dashboard_token');if(savedToken){try{let res=await fetch(`/dashboard/check?token=${savedToken}`);let data=await res.json();if(data.authenticated){authToken=savedToken;document.getElementById('pinOverlay').style.display='none';document.getElementById('dashboard').style.display='block';loadResults();refreshInterval=setInterval(()=>{loadResults();updateOnline();},5000);updateOnline();}}catch(e){}}})();
 </script>
 </body>
 </html>'''
 
-# ================= MOBILE HTML =================
+# ================= MOBILE HTML (with Pinned stars) =================
 MOBILE_HTML = '''<!DOCTYPE html>
 <html lang="hy">
 <head>
@@ -506,8 +494,9 @@ MOBILE_HTML = '''<!DOCTYPE html>
         .header { background: #161b22; border-radius: 16px; padding: 12px; margin-bottom: 12px; text-align: center; border: 1px solid #30363d; }
         .header h1 { font-size: 16px; background: linear-gradient(135deg, #58a6ff, #3fb950); -webkit-background-clip: text; background-clip: text; color: transparent; }
         .last-update { font-size: 9px; color: #6e7681; margin-top: 3px; }
-        .toolbar { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+        .toolbar { display: flex; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 6px; }
         .refresh-btn { background: #1f6feb; border: none; border-radius: 30px; color: white; padding: 6px 14px; font-size: 11px; cursor: pointer; }
+        .online-badge { background: transparent; padding: 2px 10px; border-radius: 20px; font-size: 10px; color: #58a6ff; }
         .accounts-list { display: flex; flex-direction: column; gap: 10px; }
         .account-card { background: #161b22; border-radius: 14px; border: 1px solid #30363d; overflow: hidden; }
         .account-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid #21262d; }
@@ -521,7 +510,10 @@ MOBILE_HTML = '''<!DOCTYPE html>
         .balance-zero { color: #f85149; }
         .copy-btn { background: transparent; border: 1px solid #30363d; border-radius: 16px; padding: 3px 8px; color: #58a6ff; cursor: pointer; font-size: 9px; margin-left: 6px; }
         .status-badge { font-size: 16px; margin-right: 6px; }
+        .pin-star { background: transparent; border: none; color: #d29922; cursor: pointer; font-size: 14px; padding: 0 4px; }
+        .pin-star.active { color: #f0883e; text-shadow: 0 0 3px #f0883e; }
         .footer { text-align: center; padding: 10px; font-size: 9px; color: #6e7681; border-top: 1px solid #21262d; margin-top: 12px; }
+        .error-text { color: #f85149; font-size: 9px; }
     </style>
 </head>
 <body>
@@ -531,19 +523,43 @@ MOBILE_HTML = '''<!DOCTYPE html>
     <div id="pinError" style="color:#f85149; font-size:12px; margin-top:12px;"></div></div>
 </div>
 <div id="mobileDashboard" class="mobile-dashboard">
-    <div class="header"><h1><i class="fas fa-mobile-alt"></i> Mobile Monitor</h1><div class="last-update" id="lastUpdate">Loading...</div></div>
+    <div class="header"><h1><i class="fas fa-mobile-alt"></i> Mobile Monitor</h1><div class="last-update" id="lastUpdate">Loading... <span class="online-badge" id="onlineUsers">👤 0</span></div></div>
     <div class="toolbar"><button class="refresh-btn" onclick="loadResults()"><i class="fas fa-sync-alt"></i> Refresh</button></div>
     <div class="accounts-list" id="accountsList"><div style="text-align:center; padding:30px;"><i class="fas fa-spinner fa-pulse"></i> Loading...</div></div>
-    <div class="footer"><i class="fas fa-chart-line"></i> Auto-refresh 5s | Sorted by balance (highest first)</div>
+    <div class="footer"><i class="fas fa-chart-line"></i> Auto-refresh 5s | ⭐ Pinned on top</div>
 </div>
 <script>
 let mobileResults=[], authToken=null, refreshInterval=null;
-async function verifyPin(){let pin=document.getElementById('pinInput').value;if(!pin){document.getElementById('pinError').innerText='Enter PIN';return;}try{let res=await fetch('/mobile/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:pin})});let data=await res.json();if(data.success){authToken=data.token;localStorage.setItem('mobile_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('mobileDashboard').style.display='block';loadResults();refreshInterval=setInterval(loadResults,5000);}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
-async function loadResults(){try{let res=await fetch('/results');if(res.ok){let data=await res.json();mobileResults=[...data].sort((a,b)=>(parseFloat(b.balance_value)||0)-(parseFloat(a.balance_value)||0));renderList();document.getElementById('lastUpdate').innerHTML='Last: '+new Date().toLocaleTimeString();}}catch(e){}}
-function renderList(){const container=document.getElementById('accountsList');if(mobileResults.length===0){container.innerHTML='<div style="text-align:center; padding:30px;"><i class="fas fa-inbox"></i> No results</div>';return;}const balanceClass=(v)=>{let n=parseFloat(v)||0;return n>100?'balance-positive':n>10?'balance-medium':'balance-zero';};container.innerHTML=mobileResults.map(acc=>`<div class="account-card"><div class="account-row"><div><span class="status-badge">${acc.status}</span><span class="username-value"><strong>${escapeHtml(acc.username)}</strong></span><button class="copy-btn" onclick="copyToClipboard('${escapeHtml(acc.username)}')"><i class="fas fa-copy"></i></button></div></div><div class="account-row"><div><div class="label"><i class="fas fa-key"></i> Password</div><div class="password-value">${escapeHtml(acc.password)} <button class="copy-btn" onclick="copyToClipboard('${escapeHtml(acc.password)}')"><i class="fas fa-copy"></i></button></div></div></div><div class="account-row"><div><div class="label"><i class="fas fa-coins"></i> Balance</div><div class="balance-value ${balanceClass(acc.balance_value)}">${acc.balance||'0 ֏'}</div></div></div>${acc.error?`<div class="account-row"><div class="error-text" style="color:#f85149; font-size:9px;"><i class="fas fa-exclamation-triangle"></i> ${escapeHtml(acc.error)}</div></div>`:''}</div>`).join('');}
+let pinnedAccounts = JSON.parse(localStorage.getItem('mobile_pinned') || '[]');
+
+function savePinned() { localStorage.setItem('mobile_pinned', JSON.stringify(pinnedAccounts)); }
+function togglePin(username) {
+    let idx = pinnedAccounts.indexOf(username);
+    if(idx === -1) pinnedAccounts.push(username);
+    else pinnedAccounts.splice(idx,1);
+    savePinned();
+    renderList();
+}
+function isPinned(username) { return pinnedAccounts.includes(username); }
+
+async function verifyPin(){let pin=document.getElementById('pinInput').value;if(!pin){document.getElementById('pinError').innerText='Enter PIN';return;}try{let res=await fetch('/mobile/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:pin})});let data=await res.json();if(data.success){authToken=data.token;localStorage.setItem('mobile_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('mobileDashboard').style.display='block';loadResults();refreshInterval=setInterval(()=>{loadResults();updateOnline();},5000);updateOnline();}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
+async function updateOnline(){try{let res=await fetch(`/api/online?token=${authToken}`);let data=await res.json();document.getElementById('onlineUsers').innerHTML='👤 '+data.online;}catch(e){}}
+async function loadResults(){try{let res=await fetch('/results');if(res.ok){let data=await res.json();mobileResults=data;renderList();document.getElementById('lastUpdate').innerHTML='Last: '+new Date().toLocaleTimeString()+' <span class="online-badge" id="onlineUsers">👤 '+document.getElementById('onlineUsers').innerText.replace('👤 ','')+'</span>';}}catch(e){}}
+function renderList(){
+    const container=document.getElementById('accountsList');
+    let sorted = [...mobileResults].sort((a,b)=>{
+        let aPinned = isPinned(a.username) ? 0 : 1;
+        let bPinned = isPinned(b.username) ? 0 : 1;
+        if(aPinned !== bPinned) return aPinned - bPinned;
+        return (parseFloat(b.balance_value)||0) - (parseFloat(a.balance_value)||0);
+    });
+    if(sorted.length===0){container.innerHTML='<div style="text-align:center; padding:30px;"><i class="fas fa-inbox"></i> No results</div>';return;}
+    const balanceClass=(v)=>{let n=parseFloat(v)||0;return n>100?'balance-positive':n>10?'balance-medium':'balance-zero';};
+    container.innerHTML=sorted.map(acc=>`<div class="account-card"><div class="account-row"><div><span class="status-badge">${acc.status}</span><span class="username-value"><strong>${escapeHtml(acc.username)}</strong></span><button class="copy-btn" onclick="copyToClipboard('${escapeHtml(acc.username)}')"><i class="fas fa-copy"></i></button><button class="pin-star ${isPinned(acc.username)?'active':''}" onclick="togglePin('${escapeHtml(acc.username)}')"><i class="fas fa-star"></i></button></div></div><div class="account-row"><div><div class="label"><i class="fas fa-key"></i> Password</div><div class="password-value">${escapeHtml(acc.password)} <button class="copy-btn" onclick="copyToClipboard('${escapeHtml(acc.password)}')"><i class="fas fa-copy"></i></button></div></div></div><div class="account-row"><div><div class="label"><i class="fas fa-coins"></i> Balance</div><div class="balance-value ${balanceClass(acc.balance_value)}">${acc.balance||'0 ֏'}</div></div></div>${acc.error?`<div class="account-row"><div class="error-text"><i class="fas fa-exclamation-triangle"></i> ${escapeHtml(acc.error)}</div></div>`:''}</div>`).join('');
+}
 function copyToClipboard(text){navigator.clipboard.writeText(text);}
 function escapeHtml(s){if(!s)return '';return s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]);}
-(async()=>{let savedToken=localStorage.getItem('mobile_token');if(savedToken){try{let res=await fetch(`/mobile/check?token=${savedToken}`);let data=await res.json();if(data.authenticated){authToken=savedToken;document.getElementById('pinOverlay').style.display='none';document.getElementById('mobileDashboard').style.display='block';loadResults();refreshInterval=setInterval(loadResults,5000);}}catch(e){}}})();
+(async()=>{let savedToken=localStorage.getItem('mobile_token');if(savedToken){try{let res=await fetch(`/mobile/check?token=${savedToken}`);let data=await res.json();if(data.authenticated){authToken=savedToken;document.getElementById('pinOverlay').style.display='none';document.getElementById('mobileDashboard').style.display='block';loadResults();refreshInterval=setInterval(()=>{loadResults();updateOnline();},5000);updateOnline();}}catch(e){}}})();
 </script>
 </body>
 </html>'''
@@ -571,6 +587,7 @@ MAIN_HTML = '''<!DOCTYPE html>
         .header { background: linear-gradient(135deg, rgba(22,27,34,0.95), rgba(13,17,23,0.95)); border-radius: 20px; padding: 14px 24px; margin-bottom: 20px; border: 1px solid rgba(48,54,61,0.5); text-align: center; }
         .header h1 { font-size: 24px; font-weight: 700; background: linear-gradient(135deg, #58a6ff, #3fb950, #f0883e); -webkit-background-clip: text; background-clip: text; color: transparent; }
         .header-sub { font-size: 12px; color: #8b949e; margin-top: 4px; }
+        .online-badge { background: transparent; padding: 2px 12px; border-radius: 20px; font-size: 12px; color: #58a6ff; border: 1px solid #30363d; margin-left: 8px; }
         .stats-top { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
         .stat-card { background: #161b22; border-radius: 14px; padding: 10px 12px; text-align: center; cursor: pointer; border: 1px solid #30363d; transition: all 0.2s; }
         .stat-card:hover { border-color: #58a6ff; background: #1a1f2e; transform: translateY(-2px); }
@@ -580,7 +597,7 @@ MAIN_HTML = '''<!DOCTYPE html>
         .clear-all-btn { background: #da3633; border: none; border-radius: 30px; padding: 5px 12px; color: white; cursor: pointer; font-size: 11px; margin-left: 10px; }
         .clear-all-btn:hover { background: #f85149; }
         .results-section { background: #161b22; border-radius: 20px; border: 1px solid #30363d; overflow: hidden; margin-bottom: 20px; }
-        .section-header { padding: 14px 20px; background: #0d1117; border-bottom: 1px solid #30363d; font-weight: 600; font-size: 15px; display: flex; justify-content: space-between; align-items: center; }
+        .section-header { padding: 14px 20px; background: #0d1117; border-bottom: 1px solid #30363d; font-weight: 600; font-size: 15px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
         .filter-bar { display: flex; gap: 10px; padding: 12px 20px; background: #0d1117; border-bottom: 1px solid #21262d; flex-wrap: wrap; align-items: center; }
         .search-input { padding: 6px 14px; background: #010409; border: 1px solid #30363d; border-radius: 30px; color: white; width: 220px; font-size: 12px; }
         .filter-btn { padding: 5px 14px; background: #21262d; border: none; border-radius: 30px; color: #8b949e; cursor: pointer; font-size: 11px; transition: all 0.2s; }
@@ -628,7 +645,7 @@ MAIN_HTML = '''<!DOCTYPE html>
         .status-led.offline { background: #f85149; box-shadow: 0 0 5px #f85149; }
         .status-led.checking { background: #d29922; box-shadow: 0 0 5px #d29922; animation: pulse 1s infinite; }
         @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
-        .server-controls { display: flex; gap: 6px; margin-left: auto; }
+        .server-controls { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
         .control-btn { padding: 5px 12px; border: none; border-radius: 6px; cursor: pointer; font-size: 10px; font-weight: 500; }
         .control-start { background: #238636; color: white; }
         .control-restart { background: #d29922; color: #0a0c10; }
@@ -646,13 +663,13 @@ MAIN_HTML = '''<!DOCTYPE html>
 </head>
 <body>
 <div id="pinOverlay" class="pin-overlay"><div class="pin-box"><h2><i class="fas fa-lock"></i> Master UI Access</h2><input type="password" id="pinInput" placeholder="PIN" maxlength="6" autofocus><button onclick="verifyPin()"><i class="fas fa-unlock-alt"></i> Access</button><div id="pinError" class="pin-error"></div></div></div>
-<div id="mainContent" class="main-content"><div class="container"><div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI | Multi Bot Aggregator</h1><div class="header-sub">📡 Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ | ⭐ Pin ակաունթները միշտ վերևում</div></div>
+<div id="mainContent" class="main-content"><div class="container"><div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI | Multi Bot Aggregator <span class="online-badge" id="onlineUsers">👤 0</span></h1><div class="header-sub">📡 Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ | ⭐ Pin ակաունթները միշտ վերևում</div></div>
 <div class="stats-top"><div class="stat-card" onclick="setFilter('all')"><div class="stat-number" id="totalCount">0</div><div class="stat-label">TOTAL</div></div><div class="stat-card" onclick="setFilter('success')"><div class="stat-number" id="successCount">0</div><div class="stat-label">✅ SUCCESS</div></div><div class="stat-card" onclick="setFilter('failed')"><div class="stat-number" id="failedCount">0</div><div class="stat-label">❌ FAILED</div></div><div class="stat-card" onclick="setFilter('timeout')"><div class="stat-number" id="timeoutCount">0</div><div class="stat-label">⏰ TIMEOUT</div></div><div class="stat-card"><div class="stat-number balance-total" id="totalBalance">0</div><div class="stat-label">💰 TOTAL BALANCE</div></div></div>
 <div class="results-section"><div class="section-header"><span><i class="fas fa-chart-line"></i> Results Dashboard</span><button class="clear-all-btn" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button></div>
 <div class="filter-bar"><input type="text" id="searchInput" class="search-input" placeholder="🔍 Search username..."><button class="filter-btn active" data-filter="all" onclick="setFilter('all')">All</button><button class="filter-btn" data-filter="success" onclick="setFilter('success')">✅ Success</button><button class="filter-btn" data-filter="failed" onclick="setFilter('failed')">❌ Failed</button><button class="filter-btn" data-filter="timeout" onclick="setFilter('timeout')">⏰ Timeout</button><button class="refresh-btn" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button><div class="balance-filter"><span>💰</span><button class="balance-filter-btn active" data-balance="all" onclick="setBalanceFilter('all')">All</button><button class="balance-filter-btn" data-balance="low" onclick="setBalanceFilter('low')">&lt;10</button><button class="balance-filter-btn" data-balance="mid" onclick="setBalanceFilter('mid')">10-100</button><button class="balance-filter-btn" data-balance="high" onclick="setBalanceFilter('high')">100+</button></div></div>
 <div class="table-container"><table id="resultsTable"><thead><tr><th>⭐</th><th onclick="sortBy('status')">Status</th><th onclick="sortBy('username')">Username</th><th onclick="sortBy('password')">Password</th><th onclick="sortBy('balance')">Balance</th><th>Action</th></tr></thead><tbody id="resultsBody"><tr><td colspan="6" style="text-align:center; padding:40px;">Loading...</tr></tbody></table></div></div>
 <div class="bottom-grid"><div class="card"><div class="card-header"><i class="fas fa-server"></i> Bot Servers</div><div class="servers-list"><div id="serversContainer"></div><div style="display: flex; gap: 8px; margin-top: 10px;"><input type="text" id="newServerInput" class="search-input" placeholder="http://..." style="flex:1;"><button class="add-server-btn" onclick="addServer()"><i class="fas fa-plus"></i> Add</button></div><button class="btn btn-primary" onclick="saveServers()" style="margin-top: 10px; width:100%;"><i class="fas fa-save"></i> Save & Apply</button></div><div class="button-group"><button class="btn btn-secondary" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh All</button><button class="btn btn-danger" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button><button class="btn btn-secondary" onclick="clearTerminal()"><i class="fas fa-trash"></i> Clear Terminal</button></div></div>
-<div class="card"><div class="terminal-header"><h3><i class="fas fa-terminal"></i> Live Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 MASTER UI v3.0 (PERSISTENT RESULTS + PINNED + TELEGRAM)</div><div class="terminal-line"><span class="time">●</span> 📡 Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ | ⭐ Pin արածները միշտ վերևում</div></div></div></div></div></div><div class="auto-refresh"><i class="fas fa-clock"></i> Auto-refresh: 5s | Results PERSISTENT</div>
+<div class="card"><div class="terminal-header"><h3><i class="fas fa-terminal"></i> Live Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 MASTER UI v3.0 (PERSISTENT RESULTS + PINNED + ONLINE USERS)</div><div class="terminal-line"><span class="time">●</span> 📡 Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ | ⭐ Pin արածները միշտ վերևում</div></div></div></div></div></div><div class="auto-refresh"><i class="fas fa-clock"></i> Auto-refresh: 5s | <span id="onlineUsersSmall">👤 0</span></div>
 <script>
 let allResults=[],currentFilter='all',currentBalanceFilter='all',currentSort={field:'balance',dir:'desc'},refreshInterval=null,currentServers=[],authToken=null,serverStatuses={},accountsText='';
 let pinnedAccounts = JSON.parse(localStorage.getItem('master_pinned') || '[]');
@@ -667,7 +684,8 @@ function togglePin(username) {
 function isPinned(username) { return pinnedAccounts.includes(username); }
 function toggleTerminal(){let t=document.getElementById('terminal'),b=document.querySelector('.toggle-terminal-btn');if(t.classList.contains('hidden')){t.classList.remove('hidden');b.innerHTML='<i class="fas fa-eye-slash"></i> Hide';}else{t.classList.add('hidden');b.innerHTML='<i class="fas fa-eye"></i> Show';}}
 async function verifyPin(){let p=document.getElementById('pinInput').value;if(!p){document.getElementById('pinError').innerText='Enter PIN';return;}try{let r=await fetch('/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:p})});let d=await r.json();if(d.success){authToken=d.token;localStorage.setItem('master_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';initializeApp();}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
-async function initializeApp(){await loadServers();await loadResults();await updateServerStatuses();refreshInterval=setInterval(()=>{loadResults();updateServerStatuses();},5000);}
+async function initializeApp(){await loadServers();await loadResults();await updateServerStatuses();refreshInterval=setInterval(()=>{loadResults();updateServerStatuses();updateOnline();},5000);updateOnline();}
+async function updateOnline(){try{let res=await fetch(`/api/online?token=${authToken}`);let data=await res.json();document.getElementById('onlineUsers').innerHTML='👤 '+data.online;document.getElementById('onlineUsersSmall').innerHTML='👤 '+data.online;}catch(e){}}
 async function updateServerStatuses(){try{let r=await fetch('/health');if(r.ok){let d=await r.json();for(let b of d.bots){serverStatuses[b.server]={status:b.status,running:b.running||false,current_index:b.current_index||0,total:b.total||0};}renderServersList();}}catch(e){}}
 async function loadServers(){try{let r=await fetch('/api/servers');if(r.ok){let d=await r.json();currentServers=d.servers;renderServersList();}}catch(e){addLog(`Error: ${e.message}`);}}
 function renderServersList(){let c=document.getElementById('serversContainer');if(!c)return;if(currentServers.length===0){c.innerHTML='<div style="color:#8b949e; text-align:center; padding:20px;">No servers added.</div>';return;}c.innerHTML=currentServers.map((s,i)=>{let info=serverStatuses[s]||{status:'checking',running:false,current_index:0,total:0};let ledClass='',statusText='';if(info.status==='offline'){ledClass='offline';statusText='Offline';}else if(info.status==='online'&&info.running){ledClass='running';statusText='Running';}else if(info.status==='online'&&!info.running){ledClass='online';statusText='Online';}else{ledClass='checking';statusText='Checking...';}let prog=(info.running&&info.status==='online')?`<span class="server-progress">📊 ${info.current_index}/${info.total}</span>`:'';return`<div class="server-item"><input type="text" id="server_${i}" value="${escapeHtml(s)}"><div class="server-status"><span class="status-led ${ledClass}"></span><span class="server-status-text">${statusText}</span>${prog}</div><div class="server-controls"><button class="control-btn control-start" onclick="startServer(${i})" ${info.status!=='online'?'disabled':''}>Start</button><button class="control-btn control-restart" onclick="restartServer(${i})" ${info.status!=='online'?'disabled':''}>Restart</button><button class="control-btn control-stop" onclick="stopServer(${i})" ${info.status!=='online'?'disabled':''}>Stop</button><button class="remove-server-btn" onclick="removeServer(${i})"><i class="fas fa-trash"></i></button></div></div>`;}).join('');}
@@ -684,7 +702,6 @@ function renderResults(){
     let f=allResults.filter(r=>{if(currentFilter!=='all'){if(currentFilter==='success'&&r.status!=='✅')return false;if(currentFilter==='failed'&&r.status!=='❌')return false;if(currentFilter==='timeout'&&r.status!=='⏰')return false;}if(currentBalanceFilter!=='all'){let n=parseFloat(r.balance_value)||0;if(currentBalanceFilter==='low'&&n>=10)return false;if(currentBalanceFilter==='mid'&&(n<10||n>100))return false;if(currentBalanceFilter==='high'&&n<=100)return false;}return true;});
     let s=document.getElementById('searchInput')?.value.toLowerCase()||'';
     if(s)f=f.filter(r=>r.username.toLowerCase().includes(s));
-    // Sort: pinned first, then by current sort
     f.sort((a,b)=>{
         let aPinned = isPinned(a.username) ? 0 : 1;
         let bPinned = isPinned(b.username) ? 0 : 1;
@@ -747,10 +764,10 @@ if __name__ == "__main__":
     print(f"🔐 Dashboard PIN:    {DASHBOARD_PIN}")
     print(f"🔐 Mobile PIN:       {MOBILE_PIN}")
     print("=" * 60)
-    print("📌 NEW FEATURES:")
+    print("📌 FEATURES:")
     print("   ⭐ Pin (Star) - click ⭐ to pin accounts on top (saved in browser)")
     print("   💰 Total Balance - shows sum of all balances")
-    print("   📱 Telegram Auto-Report - sends timeouts every 5 min")
-    print("   ✅ Persistent results + bug fixes")
+    print("   👤 Online Users - shows how many people have the page open")
+    print("   ✅ Persistent results + all buttons working")
     print("=" * 60 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
