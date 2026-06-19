@@ -58,7 +58,6 @@ def get_online_count():
     return len(online_users)
 
 def get_all_active_ips():
-    """Վերադարձնում է բոլոր ակտիվ IP-ների ցուցակը"""
     cleanup_inactive_users()
     ips = []
     for token, last in last_activity.items():
@@ -146,7 +145,6 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 async def block_ip_middleware(request: Request, call_next):
     client_ip = get_client_ip(request)
     
-    # Skip blocking for internal paths
     if request.url.path in ["/api/verify", "/api/check", "/api/online", "/api/active-ips", "/dashboard/verify", "/mobile/verify", "/dashboard/check", "/mobile/check"]:
         return await call_next(request)
     
@@ -167,11 +165,10 @@ cached_results: Dict[str, Dict] = load_cached_results()
 async def fetch_and_merge_results() -> List[Dict]:
     global cached_results
     
-    # 🔥 ԿԱՐԵՎՈՐ ՓՈՓՈԽՈՒԹՅՈՒՆ. verify=False SSL-ի համար
-    async with httpx.AsyncClient(timeout=10, verify=False) as client:
+    # verify=False SSL-ի համար, timeout 15 վայրկյան
+    async with httpx.AsyncClient(timeout=15, verify=False) as client:
         for server in BOT_SERVERS:
             try:
-                # 🔥 Ավելացնում ենք headers կեղծված User-Agent-ով
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                 }
@@ -384,7 +381,6 @@ async def get_online_count_endpoint(token: str = None):
 
 @app.get("/api/active-ips")
 async def get_active_ips(token: str = None):
-    """Վերադարձնում է բոլոր ակտիվ IP-ները"""
     if not token or not verify_session(token):
         return {"success": False, "error": "Unauthorized"}
     
@@ -399,7 +395,6 @@ async def get_active_ips(token: str = None):
             })
     return {"success": True, "ips": ips}
 
-# ================= IP BLOCKING API ENDPOINTS =================
 @app.get("/api/blocked-ips")
 async def get_blocked_ips(token: str = None):
     if not token or not verify_session(token):
@@ -986,9 +981,9 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("🖥️  MASTER UI - Multi Bot Aggregator v4.0")
     print("=" * 60)
-    print(f"📍 Master UI (Full): https://{get_client_ip(Request)}:9000")
-    print(f"📍 Dashboard:        https://{get_client_ip(Request)}:9000/dashboard")
-    print(f"📍 Mobile Monitor:   https://{get_client_ip(Request)}:9000/mobile")
+    print(f"📍 Master UI (Full): https://administratores.store")
+    print(f"📍 Dashboard:        https://administratores.store/dashboard")
+    print(f"📍 Mobile Monitor:   https://administratores.store/mobile")
     print("=" * 60)
     print(f"🔐 Master UI PIN:    {MASTER_PIN}")
     print(f"🔐 Dashboard PIN:    {DASHBOARD_PIN}")
@@ -1002,4 +997,4 @@ if __name__ == "__main__":
     print("   💰 Total Balance - բոլոր բալանսների գումարը")
     print("   🔄 Retry - վերագործարկել ակաունթը բոլոր սերվերների վրա")
     print("=" * 60 + "\n")
-    uvicorn.run(app, host="0.0.0.0", port=9000, ssl_keyfile="key.pem", ssl_certfile="cert.pem", log_level="info") 
+    uvicorn.run(app, host="0.0.0.0", port=9000, ssl_keyfile="key.pem", ssl_certfile="cert.pem", log_level="info")
