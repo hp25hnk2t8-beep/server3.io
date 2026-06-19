@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import secrets
 
 # ================= PIN ԿԱՐԳԱՎՈՐՈՒՄ =================
-MASTER_PIN = "1973"
+MASTER_PIN = "991122"
 DASHBOARD_PIN = "0000"
 MOBILE_PIN = "1111"
 # ====================================================
