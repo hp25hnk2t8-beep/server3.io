@@ -8,10 +8,9 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta
 import secrets
-import ssl
 
 # ================= PIN ԿԱՐԳԱՎՈՐՈՒՄ =================
-MASTER_PIN = "991122"
+MASTER_PIN = "1973"
 DASHBOARD_PIN = "0000"
 MOBILE_PIN = "1111"
 # ====================================================
@@ -58,9 +57,11 @@ def get_online_count():
     return len(online_users)
 
 def get_all_active_ips():
+    """Վերադարձնում է բոլոր ակտիվ IP-ների ցուցակը"""
     cleanup_inactive_users()
     ips = []
     for token, last in last_activity.items():
+        # token-ը կարող է լինել IP կամ session token
         if token and token not in sessions:
             ips.append(token)
     return list(set(ips))
@@ -145,6 +146,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 async def block_ip_middleware(request: Request, call_next):
     client_ip = get_client_ip(request)
     
+    # Skip blocking for internal paths
     if request.url.path in ["/api/verify", "/api/check", "/api/online", "/api/active-ips", "/dashboard/verify", "/mobile/verify", "/dashboard/check", "/mobile/check"]:
         return await call_next(request)
     
@@ -165,14 +167,10 @@ cached_results: Dict[str, Dict] = load_cached_results()
 async def fetch_and_merge_results() -> List[Dict]:
     global cached_results
     
-    # verify=False SSL-ի համար, timeout 15 վայրկյան
-    async with httpx.AsyncClient(timeout=15, verify=False) as client:
+    async with httpx.AsyncClient(timeout=10) as client:
         for server in BOT_SERVERS:
             try:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                }
-                res = await client.get(f"{server}/results", headers=headers)
+                res = await client.get(f"{server}/results")
                 if res.status_code == 200:
                     data = res.json()
                     for account in data:
@@ -199,8 +197,6 @@ async def fetch_and_merge_results() -> List[Dict]:
                                 new_acc["balance_value"] = balance_val
                                 cached_results[username] = new_acc
                     print(f"✅ Fetched/merged {len(data)} accounts from {server}")
-                else:
-                    print(f"⚠️ Server {server} returned status {res.status_code}")
             except Exception as e:
                 print(f"❌ Error fetching from {server}: {e}")
     
@@ -230,7 +226,7 @@ async def clear_single_result(username: str):
 @app.get("/health")
 async def health():
     statuses = []
-    async with httpx.AsyncClient(timeout=5, verify=False) as client:
+    async with httpx.AsyncClient(timeout=5) as client:
         for server in BOT_SERVERS:
             try:
                 res = await client.get(f"{server}/health")
@@ -253,16 +249,16 @@ async def health():
 @app.post("/retry/{username}")
 async def retry_account(username: str):
     results = []
-    async with httpx.AsyncClient(timeout=10, verify=False) as client:
-        for server in BOT_SERVERS:
-            try:
+    for server in BOT_SERVERS:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
                 res = await client.post(f"{server}/retry/{username}")
                 if res.status_code == 200:
                     results.append({"server": server, "status": "ok"})
                 else:
                     results.append({"server": server, "status": "error", "code": res.status_code})
-            except Exception as e:
-                results.append({"server": server, "status": "error", "error": str(e)})
+        except Exception as e:
+            results.append({"server": server, "status": "error", "error": str(e)})
     return {"status": "retry_sent", "details": results}
 
 @app.post("/retry/{username}/{server_id}")
@@ -272,7 +268,7 @@ async def retry_account_specific(username: str, server_id: int):
     
     server = BOT_SERVERS[server_id]
     try:
-        async with httpx.AsyncClient(timeout=10, verify=False) as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             res = await client.post(f"{server}/retry/{username}")
             if res.status_code == 200:
                 return {"success": True, "server": server}
@@ -297,7 +293,7 @@ async def control_start(server_id: int, request: Request):
             return {"success": False, "error": "No accounts provided and no saved accounts"}
     
     try:
-        async with httpx.AsyncClient(timeout=30, verify=False) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             res = await client.post(f"{server}/start", content=accounts_text)
             if res.status_code == 200:
                 return {"success": True, "message": f"Start command sent to {server}"}
@@ -317,7 +313,7 @@ async def control_restart(server_id: int):
         return {"success": False, "error": "No saved accounts for this server. Please use Start first."}
     
     try:
-        async with httpx.AsyncClient(timeout=30, verify=False) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             await client.post(f"{server}/stop")
             await asyncio.sleep(0.5)
             await client.post(f"{server}/reset")
@@ -336,7 +332,7 @@ async def control_stop(server_id: int):
     
     server = BOT_SERVERS[server_id]
     try:
-        async with httpx.AsyncClient(timeout=10, verify=False) as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             res = await client.post(f"{server}/stop")
             if res.status_code == 200:
                 return {"success": True, "message": f"Stop command sent to {server}"}
@@ -381,12 +377,14 @@ async def get_online_count_endpoint(token: str = None):
 
 @app.get("/api/active-ips")
 async def get_active_ips(token: str = None):
+    """Վերադարձնում է բոլոր ակտիվ IP-ները"""
     if not token or not verify_session(token):
         return {"success": False, "error": "Unauthorized"}
     
     cleanup_inactive_users()
     ips = []
     for token_val, last in last_activity.items():
+        # token_val-ը կարող է լինել IP հասցե
         if token_val and token_val not in sessions and "." in token_val:
             ips.append({
                 "ip": token_val,
@@ -395,6 +393,7 @@ async def get_active_ips(token: str = None):
             })
     return {"success": True, "ips": ips}
 
+# ================= IP BLOCKING API ENDPOINTS =================
 @app.get("/api/blocked-ips")
 async def get_blocked_ips(token: str = None):
     if not token or not verify_session(token):
@@ -800,18 +799,15 @@ MAIN_HTML = '''<!DOCTYPE html>
         .btn-danger { background: #da3633; color: white; }
         .auto-refresh { position: fixed; bottom: 20px; right: 20px; background: #161b22; padding: 6px 12px; border-radius: 20px; font-size: 10px; border: 1px solid #30363d; }
         .ip-section { background: #0d1117; padding: 12px; margin: 10px; border-radius: 10px; border: 1px solid #30363d; }
-        .ip-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: #010409; border-radius: 6px; margin-bottom: 5px; flex-wrap: wrap; gap: 5px; }
-        .ip-item .ip-address { color: #58a6ff; font-family: monospace; font-size: 12px; }
+        .ip-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: #010409; border-radius: 6px; margin-bottom: 5px; }
+        .ip-item .ip-address { color: #58a6ff; font-family: monospace; }
         .block-btn { background: #da3633; border: none; border-radius: 4px; color: white; padding: 2px 10px; cursor: pointer; font-size: 10px; }
         .block-btn:hover { background: #f85149; }
         .unblock-btn { background: #238636; border: none; border-radius: 4px; color: white; padding: 2px 10px; cursor: pointer; font-size: 10px; }
         .unblock-btn:hover { background: #2ea043; }
         .blocked-tag { color: #f85149; font-size: 9px; font-weight: 600; margin-left: 5px; }
         .my-ip { color: #3fb950; font-family: monospace; }
-        .ip-input-row { display: flex; gap: 8px; margin-top: 8px; }
-        .ip-input-row input { flex: 1; padding: 4px 10px; background: #010409; border: 1px solid #30363d; border-radius: 20px; color: white; font-size: 11px; }
-        .ip-input-row button { background: #da3633; border: none; border-radius: 20px; color: white; padding: 4px 12px; cursor: pointer; font-size: 10px; }
-        @media (max-width: 900px) { .bottom-grid { grid-template-columns: 1fr; } .balance-filter { margin-left: 0; margin-top: 8px; } .filter-bar { flex-direction: column; align-items: stretch; } .search-input { width: 100%; } .server-item { flex-direction: column; align-items: stretch; } .server-controls { margin-left: 0; margin-top: 8px; justify-content: flex-end; } .ip-item { flex-direction: column; align-items: flex-start; } }
+        @media (max-width: 900px) { .bottom-grid { grid-template-columns: 1fr; } .balance-filter { margin-left: 0; margin-top: 8px; } .filter-bar { flex-direction: column; align-items: stretch; } .search-input { width: 100%; } .server-item { flex-direction: column; align-items: stretch; } .server-controls { margin-left: 0; margin-top: 8px; justify-content: flex-end; } }
     </style>
 </head>
 <body>
@@ -825,8 +821,7 @@ MAIN_HTML = '''<!DOCTYPE html>
 <div class="button-group"><button class="btn btn-secondary" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh All</button><button class="btn btn-danger" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button><button class="btn btn-secondary" onclick="clearTerminal()"><i class="fas fa-trash"></i> Clear Terminal</button></div></div>
 <div class="card"><div class="terminal-header"><h3><i class="fas fa-terminal"></i> Live Console & Active IPs</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div>
 <div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 MASTER UI v4.0 (Active IPs + Block/Unblock)</div><div class="terminal-line"><span class="time">●</span> 📡 Ցուցադրվում են բոլոր ակտիվ IP-ները</div></div>
-<div class="ip-section"><h4 style="color:#58a6ff; font-size:13px; margin-bottom:8px;"><i class="fas fa-shield-alt"></i> Active IP Addresses <span style="font-size:10px; color:#8b949e;">(Your IP: <span class="my-ip" id="myIp">Loading...</span>)</span></h4><div id="activeIpsList"><div style="color:#8b949e; font-size:11px;">Loading active IPs...</div></div>
-<div class="ip-input-row"><input type="text" id="newIpInput" placeholder="Enter IP to block..."><button onclick="blockIp()"><i class="fas fa-lock"></i> Block IP</button></div></div></div></div></div></div><div class="auto-refresh"><i class="fas fa-clock"></i> Auto-refresh: 5s | <span id="onlineUsersSmall">👤 0</span></div>
+<div class="ip-section"><h4 style="color:#58a6ff; font-size:13px; margin-bottom:8px;"><i class="fas fa-shield-alt"></i> Active IP Addresses <span style="font-size:10px; color:#8b949e;">(Your IP: <span class="my-ip" id="myIp">Loading...</span>)</span></h4><div id="activeIpsList"><div style="color:#8b949e; font-size:11px;">Loading active IPs...</div></div></div></div></div></div></div><div class="auto-refresh"><i class="fas fa-clock"></i> Auto-refresh: 5s | <span id="onlineUsersSmall">👤 0</span></div>
 <script>
 let allResults=[],currentFilter='all',currentBalanceFilter='all',currentSort={field:'balance',dir:'desc'},refreshInterval=null,currentServers=[],authToken=null,serverStatuses={},accountsText='';
 let pinnedAccounts = JSON.parse(localStorage.getItem('master_pinned') || '[]');
@@ -895,70 +890,14 @@ async function copyToClipboard(t,b){await navigator.clipboard.writeText(t);let o
 async function retryAccount(u,b){let o=b.innerHTML;b.innerHTML='<i class="fas fa-spinner fa-pulse"></i>';b.disabled=true;addLog(`Retrying ${u}...`);try{let r=await fetch(`/retry/${encodeURIComponent(u)}`,{method:'POST'});let d=await r.json();if(d.status==='retry_sent'){addLog(`✅ Retry sent for ${u} to all servers`);setTimeout(()=>loadResults(),2000);}else{addLog(`❌ Retry failed`);}}catch(e){addLog(`❌ Retry error`);}setTimeout(()=>{b.innerHTML=o;b.disabled=false;},3000);}
 
 // ================= ACTIVE IP FUNCTIONS =================
-async function loadActiveIps(){
-    try{
-        let r=await fetch(`/api/active-ips?token=${authToken}`);
-        if(r.ok){
-            let d=await r.json();
-            if(d.success){
-                activeIps=d.ips;
-                renderActiveIps();
-                if(activeIps.length>0){
-                    addLog(`🌐 Active IPs found: ${activeIps.length}`);
-                    activeIps.forEach(item=>{addLog(`   IP: ${item.ip} ${item.blocked?'🔒 BLOCKED':'✅ Active'}`);});
-                } else { addLog('🌐 No active IPs found'); }
-            }
-        }
-    } catch(e){ addLog(`❌ Error loading active IPs: ${e.message}`); }
-}
-function renderActiveIps(){
-    let c=document.getElementById('activeIpsList');
-    if(!c)return;
-    if(activeIps.length===0){
-        c.innerHTML='<div style="color:#8b949e; font-size:11px; text-align:center; padding:10px;">No active IPs found</div>';
-        return;
-    }
-    c.innerHTML=activeIps.map(item=>{
-        const isBlocked=item.blocked||false;
-        return `<div class="ip-item">
-            <span class="ip-address">${escapeHtml(item.ip)}</span>
-            <span style="font-size:10px; color:#6e7681;">${item.last_active ? 'Last: '+new Date(item.last_active).toLocaleTimeString() : ''}</span>
-            ${isBlocked ? '<span class="blocked-tag">🔒 BLOCKED</span>' : ''}
-            <div style="display:flex; gap:4px;">
-                <button class="unblock-btn" onclick="unblockIp('${escapeHtml(item.ip)}')" ${!isBlocked ? 'style="display:none;"' : ''}><i class="fas fa-unlock"></i> Unblock</button>
-                <button class="block-btn" onclick="blockIp('${escapeHtml(item.ip)}')" ${isBlocked ? 'style="display:none;"' : ''}><i class="fas fa-lock"></i> Block</button>
-            </div>
-        </div>`;
-    }).join('');
-}
-async function blockIp(ip){
-    if(!ip){ let input=document.getElementById('newIpInput'); if(input){ ip=input.value.trim(); } }
-    if(!ip){ addLog('❌ Please enter an IP address'); return; }
-    addLog(`🔒 Blocking ${ip}...`);
-    try{
-        let r=await fetch('/api/block-ip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:authToken,ip:ip})});
-        let d=await r.json();
-        if(d.success){ addLog(`✅ Blocked IP: ${ip}`); await loadActiveIps(); }
-        else { addLog(`❌ ${d.error}`); }
-    } catch(e){ addLog(`❌ Error: ${e.message}`); }
-}
-async function unblockIp(ip){
-    addLog(`🔓 Unblocking ${ip}...`);
-    try{
-        let r=await fetch('/api/unblock-ip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:authToken,ip:ip})});
-        let d=await r.json();
-        if(d.success){ addLog(`✅ Unblocked IP: ${ip}`); await loadActiveIps(); }
-        else { addLog(`❌ ${d.error}`); }
-    } catch(e){ addLog(`❌ Error: ${e.message}`); }
-}
-async function getMyIp(){
-    try{ let r=await fetch('/api/my-ip'); if(r.ok){ let d=await r.json(); document.getElementById('myIp').innerText=d.ip; } }
-    catch(e){}
-}
+async function loadActiveIps(){try{let r=await fetch(`/api/active-ips?token=${authToken}`);if(r.ok){let d=await r.json();if(d.success){activeIps=d.ips;renderActiveIps();}}}catch(e){}}
+function renderActiveIps(){let c=document.getElementById('activeIpsList');if(!c)return;if(activeIps.length===0){c.innerHTML='<div style="color:#8b949e; font-size:11px;">No active IPs</div>';return;}c.innerHTML=activeIps.map(item=>`<div class="ip-item"><span class="ip-address">${escapeHtml(item.ip)}</span><span style="font-size:10px; color:#6e7681;">${item.last_active ? 'Last: '+new Date(item.last_active).toLocaleTimeString() : ''}</span>${item.blocked ? '<span class="blocked-tag">🔒 BLOCKED</span>' : ''}<div><button class="unblock-btn" onclick="unblockIp('${escapeHtml(item.ip)}')" ${!item.blocked ? 'style="display:none;"' : ''}><i class="fas fa-unlock"></i> Unblock</button><button class="block-btn" onclick="blockIp('${escapeHtml(item.ip)}')" ${item.blocked ? 'style="display:none;"' : ''}><i class="fas fa-lock"></i> Block</button></div></div>`).join('');}
+async function blockIp(ip){if(!ip){let input=document.getElementById('newIpInput');if(input){ip=input.value.trim();}}if(!ip){addLog('Please enter an IP address');return;}addLog(`🔒 Blocking ${ip}...`);try{let r=await fetch('/api/block-ip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:authToken,ip:ip})});let d=await r.json();if(d.success){addLog(`✅ Blocked IP: ${ip}`);await loadActiveIps();}else{addLog(`❌ ${d.error}`);}}catch(e){addLog(`❌ Error: ${e.message}`);}}
+async function unblockIp(ip){addLog(`🔓 Unblocking ${ip}...`);try{let r=await fetch('/api/unblock-ip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:authToken,ip:ip})});let d=await r.json();if(d.success){addLog(`✅ Unblocked IP: ${ip}`);await loadActiveIps();}else{addLog(`❌ ${d.error}`);}}catch(e){addLog(`❌ Error: ${e.message}`);}}
+async function getMyIp(){try{let r=await fetch('/api/my-ip');if(r.ok){let d=await r.json();document.getElementById('myIp').innerText=d.ip;}}catch(e){}}
 
 document.getElementById('searchInput').addEventListener('input',()=>renderResults());
 document.getElementById('pinInput').addEventListener('keypress',(e)=>{if(e.key==='Enter')verifyPin();});
-document.getElementById('newIpInput').addEventListener('keypress',(e)=>{if(e.key==='Enter')blockIp();});
 (async()=>{let t=localStorage.getItem('master_token');if(t){try{let r=await fetch(`/api/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';initializeApp();}}catch(e){}}})();
 </script>
 </body>
@@ -981,9 +920,9 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("🖥️  MASTER UI - Multi Bot Aggregator v4.0")
     print("=" * 60)
-    print(f"📍 Master UI (Full): https://administratores.store")
-    print(f"📍 Dashboard:        https://administratores.store/dashboard")
-    print(f"📍 Mobile Monitor:   https://administratores.store/mobile")
+    print(f"📍 Master UI (Full): http://localhost:9000")
+    print(f"📍 Dashboard:        http://localhost:9000/dashboard")
+    print(f"📍 Mobile Monitor:   http://localhost:9000/mobile")
     print("=" * 60)
     print(f"🔐 Master UI PIN:    {MASTER_PIN}")
     print(f"🔐 Dashboard PIN:    {DASHBOARD_PIN}")
@@ -997,4 +936,4 @@ if __name__ == "__main__":
     print("   💰 Total Balance - բոլոր բալանսների գումարը")
     print("   🔄 Retry - վերագործարկել ակաունթը բոլոր սերվերների վրա")
     print("=" * 60 + "\n")
-    uvicorn.run(app, host="0.0.0.0", port=9000, ssl_keyfile="key.pem", ssl_certfile="cert.pem", log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
