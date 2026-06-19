@@ -56,6 +56,39 @@ def get_online_count():
     cleanup_inactive_users()
     return len(online_users)
 
+def get_all_active_ips():
+    """Վերադարձնում է բոլոր ակտիվ IP-ների ցուցակը"""
+    cleanup_inactive_users()
+    ips = []
+    for token, last in last_activity.items():
+        if token and token not in sessions:
+            ips.append(token)
+    return list(set(ips))
+
+# ================= IP BLOCKING =================
+BLOCKED_IPS_FILE = Path("master_blocked_ips.json")
+
+def load_blocked_ips():
+    if BLOCKED_IPS_FILE.exists():
+        with open(BLOCKED_IPS_FILE, "r") as f:
+            return json.load(f).get("blocked_ips", [])
+    return []
+
+def save_blocked_ips(ips):
+    with open(BLOCKED_IPS_FILE, "w") as f:
+        json.dump({"blocked_ips": ips}, f)
+
+BLOCKED_IPS = load_blocked_ips()
+
+def get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+def is_ip_blocked(ip: str) -> bool:
+    return ip in BLOCKED_IPS
+
 # ================= ՍԵՐՎԵՐՆԵՐԻ ԿԱՐԳԱՎՈՐՈՒՄ =================
 CONFIG_FILE = Path("master_servers.json")
 ACCOUNTS_FILE = Path("master_saved_accounts.json")
@@ -103,8 +136,29 @@ def save_cached_results(results: Dict[str, Dict]):
 BOT_SERVERS = load_servers()
 # ====================================================
 
+# ================= CREATE FASTAPI APP =================
 app = FastAPI(title="Master UI - Multi Bot Aggregator")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# ================= MIDDLEWARE FOR IP BLOCKING =================
+@app.middleware("http")
+async def block_ip_middleware(request: Request, call_next):
+    client_ip = get_client_ip(request)
+    
+    # Skip blocking for internal paths
+    if request.url.path in ["/api/verify", "/api/check", "/api/online", "/api/active-ips", "/dashboard/verify", "/mobile/verify", "/dashboard/check", "/mobile/check"]:
+        return await call_next(request)
+    
+    if is_ip_blocked(client_ip):
+        return HTMLResponse(
+            "<h1 style='text-align:center;margin-top:50px;color:#f85149;'>🚫 Access Denied</h1>"
+            "<p style='text-align:center;color:#8b949e;'>Your IP has been blocked by the administrator.</p>"
+            "<p style='text-align:center;color:#8b949e;font-size:12px;'>Contact support for assistance.</p>",
+            status_code=403
+        )
+    
+    response = await call_next(request)
+    return response
 
 # ================= MERGE RESULTS LOGIC =================
 cached_results: Dict[str, Dict] = load_cached_results()
@@ -193,13 +247,33 @@ async def health():
 
 @app.post("/retry/{username}")
 async def retry_account(username: str):
+    results = []
     for server in BOT_SERVERS:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(f"{server}/retry/{username}")
-        except:
-            pass
-    return {"status": "retry_sent"}
+                res = await client.post(f"{server}/retry/{username}")
+                if res.status_code == 200:
+                    results.append({"server": server, "status": "ok"})
+                else:
+                    results.append({"server": server, "status": "error", "code": res.status_code})
+        except Exception as e:
+            results.append({"server": server, "status": "error", "error": str(e)})
+    return {"status": "retry_sent", "details": results}
+
+@app.post("/retry/{username}/{server_id}")
+async def retry_account_specific(username: str, server_id: int):
+    if server_id >= len(BOT_SERVERS):
+        return {"success": False, "error": "Server not found"}
+    
+    server = BOT_SERVERS[server_id]
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(f"{server}/retry/{username}")
+            if res.status_code == 200:
+                return {"success": True, "server": server}
+            return {"success": False, "error": f"Server returned {res.status_code}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 @app.post("/api/control/{server_id}/start")
 async def control_start(server_id: int, request: Request):
@@ -299,6 +373,70 @@ async def get_online_count_endpoint(token: str = None):
     if token:
         update_user_activity(token)
     return {"online": get_online_count()}
+
+@app.get("/api/active-ips")
+async def get_active_ips(token: str = None):
+    """Վերադարձնում է բոլոր ակտիվ IP-ները"""
+    if not token or not verify_session(token):
+        return {"success": False, "error": "Unauthorized"}
+    
+    cleanup_inactive_users()
+    ips = []
+    for token_val, last in last_activity.items():
+        if token_val and token_val not in sessions and "." in token_val:
+            ips.append({
+                "ip": token_val,
+                "last_active": last.isoformat(),
+                "blocked": token_val in BLOCKED_IPS
+            })
+    return {"success": True, "ips": ips}
+
+# ================= IP BLOCKING API ENDPOINTS =================
+@app.get("/api/blocked-ips")
+async def get_blocked_ips(token: str = None):
+    if not token or not verify_session(token):
+        return {"success": False, "error": "Unauthorized"}
+    return {"success": True, "blocked_ips": BLOCKED_IPS}
+
+@app.post("/api/block-ip")
+async def block_ip(request: Request):
+    data = await request.json()
+    token = data.get("token")
+    ip = data.get("ip", "").strip()
+    
+    if not token or not verify_session(token):
+        return {"success": False, "error": "Unauthorized"}
+    
+    if not ip:
+        return {"success": False, "error": "IP address required"}
+    
+    if ip in BLOCKED_IPS:
+        return {"success": False, "error": "IP already blocked"}
+    
+    BLOCKED_IPS.append(ip)
+    save_blocked_ips(BLOCKED_IPS)
+    return {"success": True, "message": f"Blocked {ip}"}
+
+@app.post("/api/unblock-ip")
+async def unblock_ip(request: Request):
+    data = await request.json()
+    token = data.get("token")
+    ip = data.get("ip", "").strip()
+    
+    if not token or not verify_session(token):
+        return {"success": False, "error": "Unauthorized"}
+    
+    if ip not in BLOCKED_IPS:
+        return {"success": False, "error": "IP not blocked"}
+    
+    BLOCKED_IPS.remove(ip)
+    save_blocked_ips(BLOCKED_IPS)
+    return {"success": True, "message": f"Unblocked {ip}"}
+
+@app.get("/api/my-ip")
+async def get_my_ip(request: Request):
+    client_ip = get_client_ip(request)
+    return {"ip": client_ip}
 
 # ================= DASHBOARD & MOBILE VERIFICATION =================
 dashboard_sessions = {}
@@ -474,7 +612,7 @@ document.getElementById('dashSearch').addEventListener('input',()=>renderTable()
 </body>
 </html>'''
 
-# ================= MOBILE HTML (with Pinned stars) =================
+# ================= MOBILE HTML =================
 MOBILE_HTML = '''<!DOCTYPE html>
 <html lang="hy">
 <head>
@@ -564,7 +702,7 @@ function escapeHtml(s){if(!s)return '';return s.replace(/[&<>]/g,m=>({'&':'&amp;
 </body>
 </html>'''
 
-# ================= MAIN UI (Full Control) =================
+# ================= MAIN UI =================
 MAIN_HTML = '''<!DOCTYPE html>
 <html lang="hy">
 <head>
@@ -658,21 +796,39 @@ MAIN_HTML = '''<!DOCTYPE html>
         .btn-secondary { background: #6e7681; color: white; }
         .btn-danger { background: #da3633; color: white; }
         .auto-refresh { position: fixed; bottom: 20px; right: 20px; background: #161b22; padding: 6px 12px; border-radius: 20px; font-size: 10px; border: 1px solid #30363d; }
-        @media (max-width: 900px) { .bottom-grid { grid-template-columns: 1fr; } .balance-filter { margin-left: 0; margin-top: 8px; } .filter-bar { flex-direction: column; align-items: stretch; } .search-input { width: 100%; } .server-item { flex-direction: column; align-items: stretch; } .server-controls { margin-left: 0; margin-top: 8px; justify-content: flex-end; } }
+        .ip-section { background: #0d1117; padding: 12px; margin: 10px; border-radius: 10px; border: 1px solid #30363d; }
+        .ip-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: #010409; border-radius: 6px; margin-bottom: 5px; flex-wrap: wrap; gap: 5px; }
+        .ip-item .ip-address { color: #58a6ff; font-family: monospace; font-size: 12px; }
+        .block-btn { background: #da3633; border: none; border-radius: 4px; color: white; padding: 2px 10px; cursor: pointer; font-size: 10px; }
+        .block-btn:hover { background: #f85149; }
+        .unblock-btn { background: #238636; border: none; border-radius: 4px; color: white; padding: 2px 10px; cursor: pointer; font-size: 10px; }
+        .unblock-btn:hover { background: #2ea043; }
+        .blocked-tag { color: #f85149; font-size: 9px; font-weight: 600; margin-left: 5px; }
+        .my-ip { color: #3fb950; font-family: monospace; }
+        .ip-input-row { display: flex; gap: 8px; margin-top: 8px; }
+        .ip-input-row input { flex: 1; padding: 4px 10px; background: #010409; border: 1px solid #30363d; border-radius: 20px; color: white; font-size: 11px; }
+        .ip-input-row button { background: #da3633; border: none; border-radius: 20px; color: white; padding: 4px 12px; cursor: pointer; font-size: 10px; }
+        @media (max-width: 900px) { .bottom-grid { grid-template-columns: 1fr; } .balance-filter { margin-left: 0; margin-top: 8px; } .filter-bar { flex-direction: column; align-items: stretch; } .search-input { width: 100%; } .server-item { flex-direction: column; align-items: stretch; } .server-controls { margin-left: 0; margin-top: 8px; justify-content: flex-end; } .ip-item { flex-direction: column; align-items: flex-start; } }
     </style>
 </head>
 <body>
 <div id="pinOverlay" class="pin-overlay"><div class="pin-box"><h2><i class="fas fa-lock"></i> Master UI Access</h2><input type="password" id="pinInput" placeholder="PIN" maxlength="6" autofocus><button onclick="verifyPin()"><i class="fas fa-unlock-alt"></i> Access</button><div id="pinError" class="pin-error"></div></div></div>
-<div id="mainContent" class="main-content"><div class="container"><div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI | Multi Bot Aggregator <span class="online-badge" id="onlineUsers">👤 0</span></h1><div class="header-sub">📡 Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ | ⭐ Pin ակաունթները միշտ վերևում</div></div>
+<div id="mainContent" class="main-content"><div class="container"><div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI | Multi Bot Aggregator <span class="online-badge" id="onlineUsers">👤 0</span></h1><div class="header-sub">📡 Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ | ⭐ Pin ակաունթները միշտ վերևում | 🔒 IP Blocking</div></div>
 <div class="stats-top"><div class="stat-card" onclick="setFilter('all')"><div class="stat-number" id="totalCount">0</div><div class="stat-label">TOTAL</div></div><div class="stat-card" onclick="setFilter('success')"><div class="stat-number" id="successCount">0</div><div class="stat-label">✅ SUCCESS</div></div><div class="stat-card" onclick="setFilter('failed')"><div class="stat-number" id="failedCount">0</div><div class="stat-label">❌ FAILED</div></div><div class="stat-card" onclick="setFilter('timeout')"><div class="stat-number" id="timeoutCount">0</div><div class="stat-label">⏰ TIMEOUT</div></div><div class="stat-card"><div class="stat-number balance-total" id="totalBalance">0</div><div class="stat-label">💰 TOTAL BALANCE</div></div></div>
 <div class="results-section"><div class="section-header"><span><i class="fas fa-chart-line"></i> Results Dashboard</span><button class="clear-all-btn" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button></div>
 <div class="filter-bar"><input type="text" id="searchInput" class="search-input" placeholder="🔍 Search username..."><button class="filter-btn active" data-filter="all" onclick="setFilter('all')">All</button><button class="filter-btn" data-filter="success" onclick="setFilter('success')">✅ Success</button><button class="filter-btn" data-filter="failed" onclick="setFilter('failed')">❌ Failed</button><button class="filter-btn" data-filter="timeout" onclick="setFilter('timeout')">⏰ Timeout</button><button class="refresh-btn" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button><div class="balance-filter"><span>💰</span><button class="balance-filter-btn active" data-balance="all" onclick="setBalanceFilter('all')">All</button><button class="balance-filter-btn" data-balance="low" onclick="setBalanceFilter('low')">&lt;10</button><button class="balance-filter-btn" data-balance="mid" onclick="setBalanceFilter('mid')">10-100</button><button class="balance-filter-btn" data-balance="high" onclick="setBalanceFilter('high')">100+</button></div></div>
 <div class="table-container"><table id="resultsTable"><thead><tr><th>⭐</th><th onclick="sortBy('status')">Status</th><th onclick="sortBy('username')">Username</th><th onclick="sortBy('password')">Password</th><th onclick="sortBy('balance')">Balance</th><th>Action</th></tr></thead><tbody id="resultsBody"><tr><td colspan="6" style="text-align:center; padding:40px;">Loading...</tr></tbody></table></div></div>
-<div class="bottom-grid"><div class="card"><div class="card-header"><i class="fas fa-server"></i> Bot Servers</div><div class="servers-list"><div id="serversContainer"></div><div style="display: flex; gap: 8px; margin-top: 10px;"><input type="text" id="newServerInput" class="search-input" placeholder="http://..." style="flex:1;"><button class="add-server-btn" onclick="addServer()"><i class="fas fa-plus"></i> Add</button></div><button class="btn btn-primary" onclick="saveServers()" style="margin-top: 10px; width:100%;"><i class="fas fa-save"></i> Save & Apply</button></div><div class="button-group"><button class="btn btn-secondary" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh All</button><button class="btn btn-danger" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button><button class="btn btn-secondary" onclick="clearTerminal()"><i class="fas fa-trash"></i> Clear Terminal</button></div></div>
-<div class="card"><div class="terminal-header"><h3><i class="fas fa-terminal"></i> Live Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 MASTER UI v3.0 (PERSISTENT RESULTS + PINNED + ONLINE USERS)</div><div class="terminal-line"><span class="time">●</span> 📡 Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ | ⭐ Pin արածները միշտ վերևում</div></div></div></div></div></div><div class="auto-refresh"><i class="fas fa-clock"></i> Auto-refresh: 5s | <span id="onlineUsersSmall">👤 0</span></div>
+<div class="bottom-grid"><div class="card"><div class="card-header"><i class="fas fa-server"></i> Bot Servers</div><div class="servers-list"><div id="serversContainer"></div><div style="display: flex; gap: 8px; margin-top: 10px;"><input type="text" id="newServerInput" class="search-input" placeholder="http://..." style="flex:1;"><button class="add-server-btn" onclick="addServer()"><i class="fas fa-plus"></i> Add</button></div><button class="btn btn-primary" onclick="saveServers()" style="margin-top: 10px; width:100%;"><i class="fas fa-save"></i> Save & Apply</button></div>
+<div class="button-group"><button class="btn btn-secondary" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh All</button><button class="btn btn-danger" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button><button class="btn btn-secondary" onclick="clearTerminal()"><i class="fas fa-trash"></i> Clear Terminal</button></div></div>
+<div class="card"><div class="terminal-header"><h3><i class="fas fa-terminal"></i> Live Console & Active IPs</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div>
+<div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 MASTER UI v4.0 (Active IPs + Block/Unblock)</div><div class="terminal-line"><span class="time">●</span> 📡 Ցուցադրվում են բոլոր ակտիվ IP-ները</div></div>
+<div class="ip-section"><h4 style="color:#58a6ff; font-size:13px; margin-bottom:8px;"><i class="fas fa-shield-alt"></i> Active IP Addresses <span style="font-size:10px; color:#8b949e;">(Your IP: <span class="my-ip" id="myIp">Loading...</span>)</span></h4><div id="activeIpsList"><div style="color:#8b949e; font-size:11px;">Loading active IPs...</div></div>
+<div class="ip-input-row"><input type="text" id="newIpInput" placeholder="Enter IP to block..."><button onclick="blockIp()"><i class="fas fa-lock"></i> Block IP</button></div></div></div></div></div></div><div class="auto-refresh"><i class="fas fa-clock"></i> Auto-refresh: 5s | <span id="onlineUsersSmall">👤 0</span></div>
 <script>
 let allResults=[],currentFilter='all',currentBalanceFilter='all',currentSort={field:'balance',dir:'desc'},refreshInterval=null,currentServers=[],authToken=null,serverStatuses={},accountsText='';
 let pinnedAccounts = JSON.parse(localStorage.getItem('master_pinned') || '[]');
+let activeIps = [];
+
 function savePinned() { localStorage.setItem('master_pinned', JSON.stringify(pinnedAccounts)); }
 function togglePin(username) {
     let idx = pinnedAccounts.indexOf(username);
@@ -684,7 +840,7 @@ function togglePin(username) {
 function isPinned(username) { return pinnedAccounts.includes(username); }
 function toggleTerminal(){let t=document.getElementById('terminal'),b=document.querySelector('.toggle-terminal-btn');if(t.classList.contains('hidden')){t.classList.remove('hidden');b.innerHTML='<i class="fas fa-eye-slash"></i> Hide';}else{t.classList.add('hidden');b.innerHTML='<i class="fas fa-eye"></i> Show';}}
 async function verifyPin(){let p=document.getElementById('pinInput').value;if(!p){document.getElementById('pinError').innerText='Enter PIN';return;}try{let r=await fetch('/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:p})});let d=await r.json();if(d.success){authToken=d.token;localStorage.setItem('master_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';initializeApp();}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
-async function initializeApp(){await loadServers();await loadResults();await updateServerStatuses();refreshInterval=setInterval(()=>{loadResults();updateServerStatuses();updateOnline();},5000);updateOnline();}
+async function initializeApp(){await loadServers();await loadResults();await updateServerStatuses();await getMyIp();await loadActiveIps();refreshInterval=setInterval(()=>{loadResults();updateServerStatuses();updateOnline();loadActiveIps();},5000);updateOnline();}
 async function updateOnline(){try{let res=await fetch(`/api/online?token=${authToken}`);let data=await res.json();document.getElementById('onlineUsers').innerHTML='👤 '+data.online;document.getElementById('onlineUsersSmall').innerHTML='👤 '+data.online;}catch(e){}}
 async function updateServerStatuses(){try{let r=await fetch('/health');if(r.ok){let d=await r.json();for(let b of d.bots){serverStatuses[b.server]={status:b.status,running:b.running||false,current_index:b.current_index||0,total:b.total||0};}renderServersList();}}catch(e){}}
 async function loadServers(){try{let r=await fetch('/api/servers');if(r.ok){let d=await r.json();currentServers=d.servers;renderServersList();}}catch(e){addLog(`Error: ${e.message}`);}}
@@ -726,14 +882,80 @@ function updateStats(){
 function sortBy(f){if(currentSort.field===f)currentSort.dir=currentSort.dir==='asc'?'desc':'asc';else{currentSort.field=f;currentSort.dir=f==='balance'?'desc':'asc';}renderResults();}
 function setFilter(f){currentFilter=f;document.querySelectorAll('.filter-btn').forEach(b=>b.classList.toggle('active',b.dataset.filter===f));renderResults();}
 function setBalanceFilter(f){currentBalanceFilter=f;document.querySelectorAll('.balance-filter-btn').forEach(b=>b.classList.toggle('active',b.dataset.balance===f));renderResults();}
-function manualRefresh(){loadResults();updateServerStatuses();addLog('Manual refresh');}
+function manualRefresh(){loadResults();updateServerStatuses();loadActiveIps();addLog('Manual refresh');}
 function escapeHtml(s){if(!s)return '';return s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]);}
 function addLog(m){let t=document.getElementById('terminal'),d=document.createElement('div');d.className='terminal-line';d.innerHTML=`<span class="time">[${new Date().toLocaleTimeString()}]</span> ${m}`;t.appendChild(d);if(t.children.length>100)t.removeChild(t.firstChild);}
 function clearTerminal(){document.getElementById('terminal').innerHTML='';addLog('Terminal cleared');}
 async function copyToClipboard(t,b){await navigator.clipboard.writeText(t);let o=b.innerHTML;b.innerHTML='✓';setTimeout(()=>b.innerHTML=o,1000);}
-async function retryAccount(u,b){let o=b.innerHTML;b.innerHTML='<i class="fas fa-spinner fa-pulse"></i>';b.disabled=true;addLog(`Retrying ${u}...`);try{await fetch(`/retry/${encodeURIComponent(u)}`,{method:'POST'});addLog(`Retry sent for ${u}`);setTimeout(()=>loadResults(),2000);}catch(e){addLog(`Retry failed`);}setTimeout(()=>{b.innerHTML=o;b.disabled=false;},3000);}
+
+// ================= RETRY FUNCTION =================
+async function retryAccount(u,b){let o=b.innerHTML;b.innerHTML='<i class="fas fa-spinner fa-pulse"></i>';b.disabled=true;addLog(`Retrying ${u}...`);try{let r=await fetch(`/retry/${encodeURIComponent(u)}`,{method:'POST'});let d=await r.json();if(d.status==='retry_sent'){addLog(`✅ Retry sent for ${u} to all servers`);setTimeout(()=>loadResults(),2000);}else{addLog(`❌ Retry failed`);}}catch(e){addLog(`❌ Retry error`);}setTimeout(()=>{b.innerHTML=o;b.disabled=false;},3000);}
+
+// ================= ACTIVE IP FUNCTIONS =================
+async function loadActiveIps(){
+    try{
+        let r=await fetch(`/api/active-ips?token=${authToken}`);
+        if(r.ok){
+            let d=await r.json();
+            if(d.success){
+                activeIps=d.ips;
+                renderActiveIps();
+                if(activeIps.length>0){
+                    addLog(`🌐 Active IPs found: ${activeIps.length}`);
+                    activeIps.forEach(item=>{addLog(`   IP: ${item.ip} ${item.blocked?'🔒 BLOCKED':'✅ Active'}`);});
+                } else { addLog('🌐 No active IPs found'); }
+            }
+        }
+    } catch(e){ addLog(`❌ Error loading active IPs: ${e.message}`); }
+}
+function renderActiveIps(){
+    let c=document.getElementById('activeIpsList');
+    if(!c)return;
+    if(activeIps.length===0){
+        c.innerHTML='<div style="color:#8b949e; font-size:11px; text-align:center; padding:10px;">No active IPs found</div>';
+        return;
+    }
+    c.innerHTML=activeIps.map(item=>{
+        const isBlocked=item.blocked||false;
+        return `<div class="ip-item">
+            <span class="ip-address">${escapeHtml(item.ip)}</span>
+            <span style="font-size:10px; color:#6e7681;">${item.last_active ? 'Last: '+new Date(item.last_active).toLocaleTimeString() : ''}</span>
+            ${isBlocked ? '<span class="blocked-tag">🔒 BLOCKED</span>' : ''}
+            <div style="display:flex; gap:4px;">
+                <button class="unblock-btn" onclick="unblockIp('${escapeHtml(item.ip)}')" ${!isBlocked ? 'style="display:none;"' : ''}><i class="fas fa-unlock"></i> Unblock</button>
+                <button class="block-btn" onclick="blockIp('${escapeHtml(item.ip)}')" ${isBlocked ? 'style="display:none;"' : ''}><i class="fas fa-lock"></i> Block</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+async function blockIp(ip){
+    if(!ip){ let input=document.getElementById('newIpInput'); if(input){ ip=input.value.trim(); } }
+    if(!ip){ addLog('❌ Please enter an IP address'); return; }
+    addLog(`🔒 Blocking ${ip}...`);
+    try{
+        let r=await fetch('/api/block-ip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:authToken,ip:ip})});
+        let d=await r.json();
+        if(d.success){ addLog(`✅ Blocked IP: ${ip}`); await loadActiveIps(); }
+        else { addLog(`❌ ${d.error}`); }
+    } catch(e){ addLog(`❌ Error: ${e.message}`); }
+}
+async function unblockIp(ip){
+    addLog(`🔓 Unblocking ${ip}...`);
+    try{
+        let r=await fetch('/api/unblock-ip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:authToken,ip:ip})});
+        let d=await r.json();
+        if(d.success){ addLog(`✅ Unblocked IP: ${ip}`); await loadActiveIps(); }
+        else { addLog(`❌ ${d.error}`); }
+    } catch(e){ addLog(`❌ Error: ${e.message}`); }
+}
+async function getMyIp(){
+    try{ let r=await fetch('/api/my-ip'); if(r.ok){ let d=await r.json(); document.getElementById('myIp').innerText=d.ip; } }
+    catch(e){}
+}
+
 document.getElementById('searchInput').addEventListener('input',()=>renderResults());
 document.getElementById('pinInput').addEventListener('keypress',(e)=>{if(e.key==='Enter')verifyPin();});
+document.getElementById('newIpInput').addEventListener('keypress',(e)=>{if(e.key==='Enter')blockIp();});
 (async()=>{let t=localStorage.getItem('master_token');if(t){try{let r=await fetch(`/api/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';initializeApp();}}catch(e){}}})();
 </script>
 </body>
@@ -754,7 +976,7 @@ async def mobile():
 if __name__ == "__main__":
     import uvicorn
     print("\n" + "=" * 60)
-    print("🖥️  MASTER UI - Multi Bot Aggregator v3.0")
+    print("🖥️  MASTER UI - Multi Bot Aggregator v4.0")
     print("=" * 60)
     print(f"📍 Master UI (Full): http://localhost:9000")
     print(f"📍 Dashboard:        http://localhost:9000/dashboard")
@@ -765,9 +987,11 @@ if __name__ == "__main__":
     print(f"🔐 Mobile PIN:       {MOBILE_PIN}")
     print("=" * 60)
     print("📌 FEATURES:")
-    print("   ⭐ Pin (Star) - click ⭐ to pin accounts on top (saved in browser)")
-    print("   💰 Total Balance - shows sum of all balances")
-    print("   👤 Online Users - shows how many people have the page open")
-    print("   ✅ Persistent results + all buttons working")
+    print("   🌐 Active IPs - ցուցադրվում են բոլոր ակտիվ IP-ները")
+    print("   🔒 Block/Unblock IP - յուրաքանչյուր IP-ի կողքին կոճակներ")
+    print("   👤 Online Users - ցույց է տալիս քանի օգտատեր է միացած")
+    print("   ⭐ Pin (Star) - ամրացնել ակաունթները վերևում")
+    print("   💰 Total Balance - բոլոր բալանսների գումարը")
+    print("   🔄 Retry - վերագործարկել ակաունթը բոլոր սերվերների վրա")
     print("=" * 60 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
