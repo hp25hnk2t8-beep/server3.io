@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta
 import secrets
+import ssl
 
 # ================= PIN ԿԱՐԳԱՎՈՐՈՒՄ =================
 MASTER_PIN = "991122"
@@ -166,10 +167,15 @@ cached_results: Dict[str, Dict] = load_cached_results()
 async def fetch_and_merge_results() -> List[Dict]:
     global cached_results
     
-    async with httpx.AsyncClient(timeout=10) as client:
+    # 🔥 ԿԱՐԵՎՈՐ ՓՈՓՈԽՈՒԹՅՈՒՆ. verify=False SSL-ի համար
+    async with httpx.AsyncClient(timeout=10, verify=False) as client:
         for server in BOT_SERVERS:
             try:
-                res = await client.get(f"{server}/results")
+                # 🔥 Ավելացնում ենք headers կեղծված User-Agent-ով
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }
+                res = await client.get(f"{server}/results", headers=headers)
                 if res.status_code == 200:
                     data = res.json()
                     for account in data:
@@ -196,6 +202,8 @@ async def fetch_and_merge_results() -> List[Dict]:
                                 new_acc["balance_value"] = balance_val
                                 cached_results[username] = new_acc
                     print(f"✅ Fetched/merged {len(data)} accounts from {server}")
+                else:
+                    print(f"⚠️ Server {server} returned status {res.status_code}")
             except Exception as e:
                 print(f"❌ Error fetching from {server}: {e}")
     
@@ -225,7 +233,7 @@ async def clear_single_result(username: str):
 @app.get("/health")
 async def health():
     statuses = []
-    async with httpx.AsyncClient(timeout=5) as client:
+    async with httpx.AsyncClient(timeout=5, verify=False) as client:
         for server in BOT_SERVERS:
             try:
                 res = await client.get(f"{server}/health")
@@ -248,16 +256,16 @@ async def health():
 @app.post("/retry/{username}")
 async def retry_account(username: str):
     results = []
-    for server in BOT_SERVERS:
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10, verify=False) as client:
+        for server in BOT_SERVERS:
+            try:
                 res = await client.post(f"{server}/retry/{username}")
                 if res.status_code == 200:
                     results.append({"server": server, "status": "ok"})
                 else:
                     results.append({"server": server, "status": "error", "code": res.status_code})
-        except Exception as e:
-            results.append({"server": server, "status": "error", "error": str(e)})
+            except Exception as e:
+                results.append({"server": server, "status": "error", "error": str(e)})
     return {"status": "retry_sent", "details": results}
 
 @app.post("/retry/{username}/{server_id}")
@@ -267,7 +275,7 @@ async def retry_account_specific(username: str, server_id: int):
     
     server = BOT_SERVERS[server_id]
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             res = await client.post(f"{server}/retry/{username}")
             if res.status_code == 200:
                 return {"success": True, "server": server}
@@ -292,7 +300,7 @@ async def control_start(server_id: int, request: Request):
             return {"success": False, "error": "No accounts provided and no saved accounts"}
     
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, verify=False) as client:
             res = await client.post(f"{server}/start", content=accounts_text)
             if res.status_code == 200:
                 return {"success": True, "message": f"Start command sent to {server}"}
@@ -312,7 +320,7 @@ async def control_restart(server_id: int):
         return {"success": False, "error": "No saved accounts for this server. Please use Start first."}
     
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, verify=False) as client:
             await client.post(f"{server}/stop")
             await asyncio.sleep(0.5)
             await client.post(f"{server}/reset")
@@ -331,7 +339,7 @@ async def control_stop(server_id: int):
     
     server = BOT_SERVERS[server_id]
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             res = await client.post(f"{server}/stop")
             if res.status_code == 200:
                 return {"success": True, "message": f"Stop command sent to {server}"}
@@ -978,9 +986,9 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("🖥️  MASTER UI - Multi Bot Aggregator v4.0")
     print("=" * 60)
-    print(f"📍 Master UI (Full): http://localhost:9000")
-    print(f"📍 Dashboard:        http://localhost:9000/dashboard")
-    print(f"📍 Mobile Monitor:   http://localhost:9000/mobile")
+    print(f"📍 Master UI (Full): https://{get_client_ip(Request)}:9000")
+    print(f"📍 Dashboard:        https://{get_client_ip(Request)}:9000/dashboard")
+    print(f"📍 Mobile Monitor:   https://{get_client_ip(Request)}:9000/mobile")
     print("=" * 60)
     print(f"🔐 Master UI PIN:    {MASTER_PIN}")
     print(f"🔐 Dashboard PIN:    {DASHBOARD_PIN}")
@@ -994,4 +1002,4 @@ if __name__ == "__main__":
     print("   💰 Total Balance - բոլոր բալանսների գումարը")
     print("   🔄 Retry - վերագործարկել ակաունթը բոլոր սերվերների վրա")
     print("=" * 60 + "\n")
-    uvicorn.run(app, host="0.0.0.0", port=9000, ssl_keyfile="key.pem", ssl_certfile="cert.pem", log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=9000, ssl_keyfile="key.pem", ssl_certfile="cert.pem", log_level="info") 
