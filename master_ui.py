@@ -11,7 +11,6 @@ import secrets
 
 # ================= PIN ԿԱՐԳԱՎՈՐՈՒՄ =================
 MASTER_PIN = "991122"
-DASHBOARD_PIN = "0000"
 MOBILE_PIN = "1111"
 # ====================================================
 
@@ -300,22 +299,8 @@ async def get_online_count_endpoint(token: str = None):
         update_user_activity(token)
     return {"online": get_online_count()}
 
-# ================= DASHBOARD & MOBILE VERIFICATION =================
-dashboard_sessions = {}
+# ================= MOBILE VERIFICATION =================
 mobile_sessions = {}
-
-def create_dashboard_session() -> str:
-    token = secrets.token_urlsafe(32)
-    dashboard_sessions[token] = datetime.now() + timedelta(hours=24)
-    return token
-
-def verify_dashboard_session(token: str) -> bool:
-    if token not in dashboard_sessions:
-        return False
-    if dashboard_sessions[token] < datetime.now():
-        del dashboard_sessions[token]
-        return False
-    return True
 
 def create_mobile_session() -> str:
     token = secrets.token_urlsafe(32)
@@ -330,15 +315,6 @@ def verify_mobile_session(token: str) -> bool:
         return False
     return True
 
-@app.post("/dashboard/verify")
-async def verify_dashboard_pin(request: Request):
-    data = await request.json()
-    pin = data.get("pin", "")
-    if pin == DASHBOARD_PIN:
-        token = create_dashboard_session()
-        return {"success": True, "token": token}
-    return {"success": False}
-
 @app.post("/mobile/verify")
 async def verify_mobile_pin(request: Request):
     data = await request.json()
@@ -348,133 +324,13 @@ async def verify_mobile_pin(request: Request):
         return {"success": True, "token": token}
     return {"success": False}
 
-@app.get("/dashboard/check")
-async def check_dashboard_session(token: str = None):
-    if token and verify_dashboard_session(token):
-        return {"authenticated": True}
-    return {"authenticated": False}
-
 @app.get("/mobile/check")
 async def check_mobile_session(token: str = None):
     if token and verify_mobile_session(token):
         return {"authenticated": True}
     return {"authenticated": False}
 
-# ================= DASHBOARD HTML =================
-DASHBOARD_HTML = '''<!DOCTYPE html>
-<html lang="hy">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard | Master UI</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        * { margin:0; padding:0; box-sizing:border-box; }
-        body { background: linear-gradient(135deg, #0a0c10 0%, #0d1117 100%); color: #e6edf3; font-family: 'Inter', sans-serif; padding: 15px; min-height: 100vh; }
-        .pin-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.95); backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-        .pin-box { background: #161b22; border: 1px solid #30363d; border-radius: 24px; padding: 40px; width: 300px; text-align: center; }
-        .pin-box input { width: 100%; padding: 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 12px; color: white; font-size: 20px; text-align: center; letter-spacing: 6px; }
-        .pin-box button { width: 100%; padding: 12px; background: #238636; border: none; border-radius: 12px; color: white; font-weight: bold; cursor: pointer; margin-top: 16px; }
-        .dashboard { display: none; }
-        .header { background: #161b22; border-radius: 16px; padding: 15px; margin-bottom: 15px; text-align: center; border: 1px solid #30363d; }
-        .header h1 { font-size: 20px; background: linear-gradient(135deg, #58a6ff, #3fb950); -webkit-background-clip: text; background-clip: text; color: transparent; }
-        .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 15px; }
-        .stat-card { background: #161b22; border-radius: 14px; padding: 12px; text-align: center; border: 1px solid #30363d; }
-        .stat-number { font-size: 24px; font-weight: 700; color: #58a6ff; }
-        .stat-number.balance-total { color: #f0883e; }
-        .stat-label { font-size: 10px; color: #8b949e; margin-top: 3px; }
-        .results-card { background: #161b22; border-radius: 16px; border: 1px solid #30363d; overflow: hidden; }
-        .card-header { padding: 12px 15px; background: #0d1117; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-        .search-input { padding: 6px 12px; background: #010409; border: 1px solid #30363d; border-radius: 20px; color: white; width: 180px; }
-        .refresh-btn { padding: 5px 12px; background: #1f6feb; border: none; border-radius: 20px; color: white; cursor: pointer; font-size: 11px; }
-        .table-container { max-height: 500px; overflow-y: auto; }
-        table { width: 100%; border-collapse: collapse; }
-        th { background: #0d1117; padding: 10px 8px; text-align: left; font-size: 11px; font-weight: 600; color: #8b949e; cursor: pointer; position: sticky; top: 0; }
-        td { padding: 8px; font-size: 11px; border-bottom: 1px solid #21262d; }
-        .balance-positive { color: #3fb950; font-weight: 600; }
-        .balance-medium { color: #d29922; font-weight: 600; }
-        .balance-zero { color: #f85149; }
-        .copy-btn { background: transparent; border: none; color: #58a6ff; cursor: pointer; padding: 2px 5px; border-radius: 4px; font-size: 10px; }
-        .pin-star { background: transparent; border: none; color: #d29922; cursor: pointer; padding: 2px 5px; font-size: 12px; transition: transform 0.1s; }
-        .pin-star.active { color: #f0883e; text-shadow: 0 0 3px #f0883e; }
-        .footer { text-align: center; padding: 12px; font-size: 9px; color: #6e7681; border-top: 1px solid #21262d; margin-top: 12px; }
-        .online-badge { background: transparent; padding: 2px 10px; border-radius: 20px; font-size: 10px; color: #58a6ff; }
-        @media (max-width: 600px) { .stats-grid { grid-template-columns: repeat(3, 1fr); } }
-    </style>
-</head>
-<body>
-<div id="pinOverlay" class="pin-overlay">
-    <div class="pin-box"><h2><i class="fas fa-chart-line"></i> Dashboard Access</h2>
-    <input type="password" id="pinInput" placeholder="PIN" maxlength="6"><button onclick="verifyPin()">Access</button>
-    <div id="pinError" style="color:#f85149; font-size:12px; margin-top:12px;"></div></div>
-</div>
-<div id="dashboard" class="dashboard">
-    <div class="header"><h1><i class="fas fa-chart-line"></i> Dashboard | Multi Bot Results</h1></div>
-    <div class="stats-grid">
-        <div class="stat-card"><div class="stat-number" id="dashTotal">0</div><div class="stat-label">TOTAL</div></div>
-        <div class="stat-card"><div class="stat-number" style="color:#3fb950" id="dashSuccess">0</div><div class="stat-label">✅ SUCCESS</div></div>
-        <div class="stat-card"><div class="stat-number" style="color:#f85149" id="dashFailed">0</div><div class="stat-label">❌ FAILED</div></div>
-        <div class="stat-card"><div class="stat-number" style="color:#d29922" id="dashTimeout">0</div><div class="stat-label">⏰ TIMEOUT</div></div>
-        <div class="stat-card"><div class="stat-number balance-total" id="dashTotalBalance">0</div><div class="stat-label">💰 TOTAL BALANCE</div></div>
-    </div>
-    <div class="results-card">
-        <div class="card-header"><span><i class="fas fa-table"></i> Results <span class="online-badge" id="onlineUsers">👤 0</span></span><div><input type="text" id="dashSearch" class="search-input" placeholder="Search..."><button class="refresh-btn" onclick="loadResults()"><i class="fas fa-sync-alt"></i></button></div></div>
-        <div class="table-container"><table id="dashTable"><thead><tr><th>⭐</th><th onclick="sortBy('status')">Status</th><th onclick="sortBy('username')">Username</th><th onclick="sortBy('balance')">Balance</th></tr></thead><tbody id="dashTableBody"><tr><td colspan="4" style="text-align:center; padding:30px;">Loading...</td></tr></tbody></table></div>
-    </div>
-    <div class="footer"><i class="fas fa-sync-alt"></i> Auto-refresh 5s</div>
-</div>
-<script>
-let dashResults=[], authToken=null, refreshInterval=null, currentSort={field:'balance',dir:'desc'};
-let pinnedAccounts = JSON.parse(localStorage.getItem('dashboard_pinned') || '[]');
-
-function savePinned() { localStorage.setItem('dashboard_pinned', JSON.stringify(pinnedAccounts)); }
-function togglePin(username) {
-    let idx = pinnedAccounts.indexOf(username);
-    if(idx === -1) pinnedAccounts.push(username);
-    else pinnedAccounts.splice(idx,1);
-    savePinned();
-    renderTable();
-}
-function isPinned(username) { return pinnedAccounts.includes(username); }
-
-async function verifyPin(){let pin=document.getElementById('pinInput').value;if(!pin){document.getElementById('pinError').innerText='Enter PIN';return;}try{let res=await fetch('/dashboard/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:pin})});let data=await res.json();if(data.success){authToken=data.token;localStorage.setItem('dashboard_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('dashboard').style.display='block';loadResults();refreshInterval=setInterval(()=>{loadResults();updateOnline();},5000);updateOnline();}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
-async function updateOnline(){try{let res=await fetch(`/api/online?token=${authToken}`);let data=await res.json();document.getElementById('onlineUsers').innerHTML='👤 '+data.online;}catch(e){}}
-async function loadResults(){try{let res=await fetch('/results');if(res.ok){dashResults=await res.json();renderTable();updateStats();}}catch(e){}}
-function renderTable(){
-    let filtered=dashResults;
-    let search=document.getElementById('dashSearch')?.value.toLowerCase()||'';
-    if(search)filtered=filtered.filter(r=>r.username.toLowerCase().includes(search));
-    filtered.sort((a,b)=>{
-        let aPinned = isPinned(a.username) ? 0 : 1;
-        let bPinned = isPinned(b.username) ? 0 : 1;
-        if(aPinned !== bPinned) return aPinned - bPinned;
-        let av=currentSort.field==='balance'?(a.balance_value||0):(a[currentSort.field]||'').toString().toLowerCase();
-        let bv=currentSort.field==='balance'?(b.balance_value||0):(b[currentSort.field]||'').toString().toLowerCase();
-        if(typeof av==='number')return currentSort.dir==='asc'?av-bv:bv-av;
-        return currentSort.dir==='asc'?(av>bv?1:-1):(av<bv?1:-1);
-    });
-    let balanceClass=(v)=>{let n=parseFloat(v)||0;return n>100?'balance-positive':n>10?'balance-medium':'balance-zero';};
-    document.getElementById('dashTableBody').innerHTML=filtered.map(r=>`<tr><td><button class="pin-star ${isPinned(r.username)?'active':''}" onclick="togglePin('${escapeHtml(r.username)}')"><i class="fas fa-star"></i></button></td><td style="font-size:16px">${r.status}</td><td><strong style="color:#58a6ff">${escapeHtml(r.username)}</strong><button class="copy-btn" onclick="copyToClipboard('${escapeHtml(r.username)}')"><i class="fas fa-copy"></i></button></td><td class="${balanceClass(r.balance_value)}">${r.balance||'0 ֏'}</td></tr>`).join('');
-}
-function updateStats(){
-    let totalBalance = dashResults.reduce((sum,r)=> sum + (parseFloat(r.balance_value)||0),0);
-    document.getElementById('dashTotal').innerText=dashResults.length;
-    document.getElementById('dashSuccess').innerText=dashResults.filter(r=>r.status==='✅').length;
-    document.getElementById('dashFailed').innerText=dashResults.filter(r=>r.status==='❌').length;
-    document.getElementById('dashTimeout').innerText=dashResults.filter(r=>r.status==='⏰').length;
-    document.getElementById('dashTotalBalance').innerText=totalBalance.toFixed(2)+' ֏';
-}
-function sortBy(field){if(currentSort.field===field)currentSort.dir=currentSort.dir==='asc'?'desc':'asc';else{currentSort.field=field;currentSort.dir='desc';}renderTable();}
-function copyToClipboard(text){navigator.clipboard.writeText(text);}
-function escapeHtml(s){if(!s)return '';return s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]);}
-document.getElementById('dashSearch').addEventListener('input',()=>renderTable());
-(async()=>{let savedToken=localStorage.getItem('dashboard_token');if(savedToken){try{let res=await fetch(`/dashboard/check?token=${savedToken}`);let data=await res.json();if(data.authenticated){authToken=savedToken;document.getElementById('pinOverlay').style.display='none';document.getElementById('dashboard').style.display='block';loadResults();refreshInterval=setInterval(()=>{loadResults();updateOnline();},5000);updateOnline();}}catch(e){}}})();
-</script>
-</body>
-</html>'''
-
-# ================= MOBILE HTML (with Pinned stars) =================
+# ================= MOBILE HTML =================
 MOBILE_HTML = '''<!DOCTYPE html>
 <html lang="hy">
 <head>
@@ -743,10 +599,6 @@ document.getElementById('pinInput').addEventListener('keypress',(e)=>{if(e.key==
 async def root():
     return HTMLResponse(MAIN_HTML)
 
-@app.get("/dashboard")
-async def dashboard():
-    return HTMLResponse(DASHBOARD_HTML)
-
 @app.get("/mobile")
 async def mobile():
     return HTMLResponse(MOBILE_HTML)
@@ -757,11 +609,9 @@ if __name__ == "__main__":
     print("🖥️  MASTER UI - Multi Bot Aggregator v3.0")
     print("=" * 60)
     print(f"📍 Master UI (Full): http://localhost:9000")
-    print(f"📍 Dashboard:        http://localhost:9000/dashboard")
     print(f"📍 Mobile Monitor:   http://localhost:9000/mobile")
     print("=" * 60)
     print(f"🔐 Master UI PIN:    {MASTER_PIN}")
-    print(f"🔐 Dashboard PIN:    {DASHBOARD_PIN}")
     print(f"🔐 Mobile PIN:       {MOBILE_PIN}")
     print("=" * 60)
     print("📌 FEATURES:")
