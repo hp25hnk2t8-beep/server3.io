@@ -61,6 +61,14 @@ async def get_mobile_user(token: Optional[str] = None) -> str:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return token
 
+async def get_any_user(token: Optional[str] = None) -> str:
+    """Ստուգում է կամ Master, կամ Mobile սեսիան"""
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authentication token")
+    if verify_session(token) or verify_mobile_session(token):
+        return token
+    raise HTTPException(status_code=401, detail="Invalid or expired token")
+
 # ================= ONLINE USERS =================
 online_users = {}
 last_activity = {}
@@ -179,15 +187,16 @@ async def fetch_and_merge_results() -> List[Dict]:
     return list(cached_results.values())
 
 # ================= PROTECTED API ENDPOINTS =================
+# Այժմ բոլոր endpoints-ները թույլ են տալիս ինչպես Master, այնպես էլ Mobile session-ները
 
 @app.get("/results")
-async def get_merged_results(token: str = Depends(get_current_user)):
-    """Արդյունքները ստանալու համար պահանջվում է աուտենտիֆիկացիա"""
+async def get_merged_results(token: str = Depends(get_any_user)):
+    """Արդյունքները ստանալու համար պահանջվում է աուտենտիֆիկացիա (Master կամ Mobile)"""
     return await fetch_and_merge_results()
 
 @app.post("/results/clear")
 async def clear_all_results(token: str = Depends(get_current_user)):
-    """Բոլոր արդյունքները ջնջելու համար պահանջվում է աուտենտիֆիկացիա"""
+    """Բոլոր արդյունքները ջնջելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     global cached_results
     cached_results = {}
     save_cached_results({})
@@ -195,7 +204,7 @@ async def clear_all_results(token: str = Depends(get_current_user)):
 
 @app.post("/results/clear/{username}")
 async def clear_single_result(username: str, token: str = Depends(get_current_user)):
-    """Մեկ արդյունք ջնջելու համար պահանջվում է աուտենտիֆիկացիա"""
+    """Մեկ արդյունք ջնջելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     global cached_results
     if username in cached_results:
         del cached_results[username]
@@ -204,8 +213,8 @@ async def clear_single_result(username: str, token: str = Depends(get_current_us
     return {"success": False, "message": "Account not found"}
 
 @app.get("/health")
-async def health(token: str = Depends(get_current_user)):
-    """Սերվերների կարգավիճակը ստանալու համար պահանջվում է աուտենտիֆիկացիա"""
+async def health(token: str = Depends(get_any_user)):
+    """Սերվերների կարգավիճակը ստանալու համար պահանջվում է աուտենտիֆիկացիա (Master կամ Mobile)"""
     statuses = []
     async with httpx.AsyncClient(timeout=5) as client:
         for server in BOT_SERVERS:
@@ -228,8 +237,8 @@ async def health(token: str = Depends(get_current_user)):
     return {"bots": statuses}
 
 @app.post("/retry/{username}")
-async def retry_account(username: str, token: str = Depends(get_current_user)):
-    """Ակաունթը կրկին փորձելու համար պահանջվում է աուտենտիֆիկացիա"""
+async def retry_account(username: str, token: str = Depends(get_any_user)):
+    """Ակաունթը կրկին փորձելու համար պահանջվում է աուտենտիֆիկացիա (Master կամ Mobile)"""
     for server in BOT_SERVERS:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
@@ -240,7 +249,7 @@ async def retry_account(username: str, token: str = Depends(get_current_user)):
 
 @app.post("/api/control/{server_id}/start")
 async def control_start(server_id: int, request: Request, token: str = Depends(get_current_user)):
-    """Սերվերը գործարկելու համար պահանջվում է աուտենտիֆիկացիա"""
+    """Սերվերը գործարկելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     if server_id >= len(BOT_SERVERS):
         return {"success": False, "error": "Server not found"}
     
@@ -266,7 +275,7 @@ async def control_start(server_id: int, request: Request, token: str = Depends(g
 
 @app.post("/api/control/{server_id}/restart")
 async def control_restart(server_id: int, token: str = Depends(get_current_user)):
-    """Սերվերը վերագործարկելու համար պահանջվում է աուտենտիֆիկացիա"""
+    """Սերվերը վերագործարկելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     if server_id >= len(BOT_SERVERS):
         return {"success": False, "error": "Server not found"}
     
@@ -291,7 +300,7 @@ async def control_restart(server_id: int, token: str = Depends(get_current_user)
 
 @app.post("/api/control/{server_id}/stop")
 async def control_stop(server_id: int, token: str = Depends(get_current_user)):
-    """Սերվերը կանգնեցնելու համար պահանջվում է աուտենտիֆիկացիա"""
+    """Սերվերը կանգնեցնելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     if server_id >= len(BOT_SERVERS):
         return {"success": False, "error": "Server not found"}
     
@@ -307,12 +316,12 @@ async def control_stop(server_id: int, token: str = Depends(get_current_user)):
 
 @app.get("/api/servers")
 async def get_servers(token: str = Depends(get_current_user)):
-    """Սերվերների ցանկը ստանալու համար պահանջվում է աուտենտիֆիկացիա"""
+    """Սերվերների ցանկը ստանալու համար պահանջվում է Master աուտենտիֆիկացիա"""
     return {"servers": BOT_SERVERS}
 
 @app.post("/api/servers")
 async def update_servers(request: Request, token: str = Depends(get_current_user)):
-    """Սերվերների ցանկը թարմացնելու համար պահանջվում է աուտենտիֆիկացիա"""
+    """Սերվերների ցանկը թարմացնելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     global BOT_SERVERS
     data = await request.json()
     servers = data.get("servers", [])
@@ -1082,5 +1091,6 @@ if __name__ == "__main__":
     print("   🔒 ALL API endpoints are protected with authentication")
     print("   🛡️ Source code protection (View Source & Inspect Element disabled)")
     print("   🔗 Custom paths: /homepages.admin.dashboard & /mobile.dashboard.administration")
+    print("   📱 Mobile works with separate PIN and session")
     print("=" * 60 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
