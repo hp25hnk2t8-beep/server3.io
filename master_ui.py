@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Optional
 import json
@@ -1046,12 +1046,21 @@ console.log('%c🔒 Mobile Protected Mode Active', 'font-size:20px; color:#3fb95
 </body>
 </html>'''
 
+# ================= MAIN PAGE ROUTES =================
+
 @app.get("/")
 async def root():
+    """Գլխավոր էջ - վերահղում է դեպի Master UI"""
+    return RedirectResponse(url="/homepages.admin.dashboard")
+
+@app.get("/homepages.admin.dashboard")
+async def master_dashboard():
+    """Master UI - հիմնական կառավարման վահանակ"""
     return HTMLResponse(MAIN_HTML)
 
-@app.get("/mobile")
-async def mobile():
+@app.get("/mobile.dashboard.administration")
+async def mobile_dashboard():
+    """Mobile UI - բջջային մոնիտորինգի վահանակ"""
     return HTMLResponse(MOBILE_HTML)
 
 if __name__ == "__main__":
@@ -1059,8 +1068,8 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("🖥️  MASTER UI - Multi Bot Aggregator v3.0")
     print("=" * 60)
-    print(f"📍 Master UI (Full): http://localhost:9000")
-    print(f"📍 Mobile Monitor:   http://localhost:9000/mobile")
+    print(f"📍 Master UI (Full): http://localhost:9000/homepages.admin.dashboard")
+    print(f"📍 Mobile Monitor:   http://localhost:9000/mobile.dashboard.administration")
     print("=" * 60)
     print(f"🔐 Master UI PIN:    {MASTER_PIN}")
     print(f"🔐 Mobile PIN:       {MOBILE_PIN}")
@@ -1072,5 +1081,6 @@ if __name__ == "__main__":
     print("   ✅ Persistent results + all buttons working")
     print("   🔒 ALL API endpoints are protected with authentication")
     print("   🛡️ Source code protection (View Source & Inspect Element disabled)")
+    print("   🔗 Custom paths: /homepages.admin.dashboard & /mobile.dashboard.administration")
     print("=" * 60 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
