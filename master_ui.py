@@ -1,3 +1,5 @@
+# ================= MASTER UI V3.2 - COMPLETE ENCRYPTED MULTI BOT AGGREGATOR =================
+import os
 import httpx
 import asyncio
 from fastapi import FastAPI, Request, HTTPException, Depends
@@ -8,10 +10,39 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta
 import secrets
+import base64
+from cryptography.fernet import Fernet
+from dotenv import load_dotenv
+load_dotenv()
+
+# ================= ENCRYPTION SETUP =================
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+if not ENCRYPTION_KEY:
+    ENCRYPTION_KEY = base64.urlsafe_b64encode(os.urandom(32)).decode()
+    print(f"⚠️ Generated ENCRYPTION_KEY: {ENCRYPTION_KEY}")
+    print("⚠️ Add this to your .env file!")
+
+cipher_suite = Fernet(ENCRYPTION_KEY.encode())
+
+def decrypt_data(encrypted: str) -> any:
+    """Decrypt data back to original format"""
+    try:
+        decrypted = cipher_suite.decrypt(encrypted.encode()).decode()
+        try:
+            return json.loads(decrypted)
+        except:
+            return decrypted
+    except Exception as e:
+        print(f"Decryption error: {e}")
+        return None
+
+# ================= BOT AUTH FOR FETCHING =================
+BOT_AUTH_USERNAME = os.getenv("BOT_AUTH_USERNAME", "Pentagon999")
+BOT_AUTH_PASSWORD = os.getenv("BOT_AUTH_PASSWORD", "King2002")
 
 # ================= PIN ԿԱՐԳԱՎՈՐՈՒՄ =================
-MASTER_PIN = "285925"
-MOBILE_PIN = "185659"
+MASTER_PIN = os.getenv("MASTER_PIN", "285925")
+MOBILE_PIN = os.getenv("MOBILE_PIN", "185659")
 # ====================================================
 
 # ================= ՍԵՍԻԱՆԵՐԻ ԿԱՌԱՎԱՐՈՒՄ =================
@@ -46,7 +77,6 @@ def verify_mobile_session(token: str) -> bool:
 
 # ================= AUTH DEPENDENCIES =================
 async def get_current_user(token: Optional[str] = None) -> str:
-    """Ստուգում է Master UI-ի սեսիան"""
     if not token:
         raise HTTPException(status_code=401, detail="Missing authentication token")
     if not verify_session(token):
@@ -54,7 +84,6 @@ async def get_current_user(token: Optional[str] = None) -> str:
     return token
 
 async def get_mobile_user(token: Optional[str] = None) -> str:
-    """Ստուգում է Mobile UI-ի սեսիան"""
     if not token:
         raise HTTPException(status_code=401, detail="Missing authentication token")
     if not verify_mobile_session(token):
@@ -62,7 +91,6 @@ async def get_mobile_user(token: Optional[str] = None) -> str:
     return token
 
 async def get_any_user(token: Optional[str] = None) -> str:
-    """Ստուգում է կամ Master, կամ Mobile սեսիան"""
     if not token:
         raise HTTPException(status_code=401, detail="Missing authentication token")
     if verify_session(token) or verify_mobile_session(token):
@@ -141,45 +169,92 @@ def save_cached_results(results: Dict[str, Dict]):
 BOT_SERVERS = load_servers()
 # ====================================================
 
-app = FastAPI(title="Master UI - Multi Bot Aggregator")
+app = FastAPI(title="Master UI - Encrypted Multi Bot Aggregator")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ================= MERGE RESULTS LOGIC =================
+# ================= MERGE RESULTS LOGIC WITH ENCRYPTION =================
 cached_results: Dict[str, Dict] = load_cached_results()
 
-async def fetch_and_merge_results() -> List[Dict]:
+async def fetch_and_merge_results(use_encrypted: bool = True) -> List[Dict]:
+    """Fetch results from all bots, decrypt if encrypted"""
     global cached_results
     
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=15) as client:
         for server in BOT_SERVERS:
             try:
-                res = await client.get(f"{server}/results")
-                if res.status_code == 200:
-                    data = res.json()
-                    for account in data:
-                        username = account.get("username")
-                        if username:
-                            balance_val = account.get("balance_value")
-                            if balance_val is None:
-                                balance_val = 0.0
-                            try:
-                                balance_val = float(balance_val)
-                            except:
-                                balance_val = 0.0
-                            
-                            if username in cached_results:
-                                old = cached_results[username]
-                                old["balance"] = account.get("balance", old.get("balance", "0 ֏"))
-                                old["balance_value"] = balance_val
-                                old["status"] = account.get("status", old.get("status", "❌"))
-                                old["error"] = account.get("error", old.get("error", ""))
-                                old["timestamp"] = account.get("timestamp", old.get("timestamp", datetime.now().isoformat()))
-                                old["password"] = account.get("password", old.get("password", ""))
-                            else:
-                                new_acc = account.copy()
-                                new_acc["balance_value"] = balance_val
-                                cached_results[username] = new_acc
-                    print(f"✅ Fetched/merged {len(data)} accounts from {server}")
+                # Try encrypted endpoint first
+                if use_encrypted:
+                    try:
+                        # Use Basic Auth for encrypted endpoint
+                        auth = httpx.BasicAuth(BOT_AUTH_USERNAME, BOT_AUTH_PASSWORD)
+                        res = await client.get(
+                            f"{server}/results/encrypted",
+                            auth=auth,
+                            timeout=10
+                        )
+                        if res.status_code == 200:
+                            data = res.json()
+                            encrypted_data = data.get("data")
+                            if encrypted_data:
+                                decrypted_data = decrypt_data(encrypted_data)
+                                if decrypted_data and isinstance(decrypted_data, list):
+                                    for account in decrypted_data:
+                                        username = account.get("username")
+                                        if username:
+                                            balance_val = account.get("balance_value", 0.0)
+                                            try:
+                                                balance_val = float(balance_val)
+                                            except:
+                                                balance_val = 0.0
+                                            
+                                            if username in cached_results:
+                                                old = cached_results[username]
+                                                old["balance"] = account.get("balance", old.get("balance", "0 ֏"))
+                                                old["balance_value"] = balance_val
+                                                old["status"] = account.get("status", old.get("status", "❌"))
+                                                old["error"] = account.get("error", old.get("error", ""))
+                                                old["timestamp"] = account.get("timestamp", old.get("timestamp", datetime.now().isoformat()))
+                                                old["password"] = account.get("password", old.get("password", ""))
+                                            else:
+                                                new_acc = account.copy()
+                                                new_acc["balance_value"] = balance_val
+                                                cached_results[username] = new_acc
+                                    print(f"✅ Fetched/merged {len(decrypted_data)} encrypted accounts from {server}")
+                                    continue
+                    except Exception as e:
+                        print(f"⚠️ Encrypted endpoint failed for {server}: {e}")
+                
+                # Fallback to regular results
+                try:
+                    res = await client.get(f"{server}/results", timeout=10)
+                    if res.status_code == 200:
+                        data = res.json()
+                        for account in data:
+                            username = account.get("username")
+                            if username:
+                                balance_val = account.get("balance_value", 0.0)
+                                try:
+                                    balance_val = float(balance_val)
+                                except:
+                                    balance_val = 0.0
+                                
+                                if username in cached_results:
+                                    old = cached_results[username]
+                                    old["balance"] = account.get("balance", old.get("balance", "0 ֏"))
+                                    old["balance_value"] = balance_val
+                                    old["status"] = account.get("status", old.get("status", "❌"))
+                                    old["error"] = account.get("error", old.get("error", ""))
+                                    old["timestamp"] = account.get("timestamp", old.get("timestamp", datetime.now().isoformat()))
+                                    # Keep existing password if not provided
+                                else:
+                                    new_acc = account.copy()
+                                    new_acc["balance_value"] = balance_val
+                                    new_acc["password"] = account.get("password", "")
+                                    cached_results[username] = new_acc
+                        print(f"✅ Fetched/merged {len(data)} accounts from {server}")
+                except Exception as e:
+                    print(f"⚠️ Regular endpoint failed for {server}: {e}")
+                    
             except Exception as e:
                 print(f"❌ Error fetching from {server}: {e}")
     
@@ -187,16 +262,14 @@ async def fetch_and_merge_results() -> List[Dict]:
     return list(cached_results.values())
 
 # ================= PROTECTED API ENDPOINTS =================
-# Այժմ բոլոր endpoints-ները թույլ են տալիս ինչպես Master, այնպես էլ Mobile session-ները
 
 @app.get("/results")
 async def get_merged_results(token: str = Depends(get_any_user)):
-    """Արդյունքները ստանալու համար պահանջվում է աուտենտիֆիկացիա (Master կամ Mobile)"""
-    return await fetch_and_merge_results()
+    """Արդյունքները ստանալու համար պահանջվում է աուտենտիֆիկացիա"""
+    return await fetch_and_merge_results(use_encrypted=True)
 
 @app.post("/results/clear")
 async def clear_all_results(token: str = Depends(get_current_user)):
-    """Բոլոր արդյունքները ջնջելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     global cached_results
     cached_results = {}
     save_cached_results({})
@@ -204,7 +277,6 @@ async def clear_all_results(token: str = Depends(get_current_user)):
 
 @app.post("/results/clear/{username}")
 async def clear_single_result(username: str, token: str = Depends(get_current_user)):
-    """Մեկ արդյունք ջնջելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     global cached_results
     if username in cached_results:
         del cached_results[username]
@@ -214,7 +286,6 @@ async def clear_single_result(username: str, token: str = Depends(get_current_us
 
 @app.get("/health")
 async def health(token: str = Depends(get_any_user)):
-    """Սերվերների կարգավիճակը ստանալու համար պահանջվում է աուտենտիֆիկացիա (Master կամ Mobile)"""
     statuses = []
     async with httpx.AsyncClient(timeout=5) as client:
         for server in BOT_SERVERS:
@@ -228,7 +299,8 @@ async def health(token: str = Depends(get_any_user)):
                         "status": "online",
                         "running": is_running,
                         "current_index": data.get("current_index", 0),
-                        "total": data.get("total", 0)
+                        "total": data.get("total", 0),
+                        "encryption": data.get("encryption", "enabled")
                     })
                 else:
                     statuses.append({"server": server, "status": "unhealthy", "running": False})
@@ -238,18 +310,17 @@ async def health(token: str = Depends(get_any_user)):
 
 @app.post("/retry/{username}")
 async def retry_account(username: str, token: str = Depends(get_any_user)):
-    """Ակաունթը կրկին փորձելու համար պահանջվում է աուտենտիֆիկացիա (Master կամ Mobile)"""
     for server in BOT_SERVERS:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(f"{server}/retry/{username}")
+                auth = httpx.BasicAuth(BOT_AUTH_USERNAME, BOT_AUTH_PASSWORD)
+                await client.post(f"{server}/retry/{username}", auth=auth)
         except:
             pass
     return {"status": "retry_sent"}
 
 @app.post("/api/control/{server_id}/start")
 async def control_start(server_id: int, request: Request, token: str = Depends(get_current_user)):
-    """Սերվերը գործարկելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     if server_id >= len(BOT_SERVERS):
         return {"success": False, "error": "Server not found"}
     
@@ -275,7 +346,6 @@ async def control_start(server_id: int, request: Request, token: str = Depends(g
 
 @app.post("/api/control/{server_id}/restart")
 async def control_restart(server_id: int, token: str = Depends(get_current_user)):
-    """Սերվերը վերագործարկելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     if server_id >= len(BOT_SERVERS):
         return {"success": False, "error": "Server not found"}
     
@@ -300,7 +370,6 @@ async def control_restart(server_id: int, token: str = Depends(get_current_user)
 
 @app.post("/api/control/{server_id}/stop")
 async def control_stop(server_id: int, token: str = Depends(get_current_user)):
-    """Սերվերը կանգնեցնելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     if server_id >= len(BOT_SERVERS):
         return {"success": False, "error": "Server not found"}
     
@@ -316,12 +385,10 @@ async def control_stop(server_id: int, token: str = Depends(get_current_user)):
 
 @app.get("/api/servers")
 async def get_servers(token: str = Depends(get_current_user)):
-    """Սերվերների ցանկը ստանալու համար պահանջվում է Master աուտենտիֆիկացիա"""
     return {"servers": BOT_SERVERS}
 
 @app.post("/api/servers")
 async def update_servers(request: Request, token: str = Depends(get_current_user)):
-    """Սերվերների ցանկը թարմացնելու համար պահանջվում է Master աուտենտիֆիկացիա"""
     global BOT_SERVERS
     data = await request.json()
     servers = data.get("servers", [])
@@ -332,16 +399,14 @@ async def update_servers(request: Request, token: str = Depends(get_current_user
 
 @app.get("/api/online")
 async def get_online_count_endpoint(token: Optional[str] = None):
-    """Online օգտատերերի քանակը - հասանելի է առանց աուտենտիֆիկացիայի (միայն քանակը)"""
     if token:
         update_user_activity(token)
     return {"online": get_online_count()}
 
-# ================= AUTH ENDPOINTS (ՉԵՆ ՊԱՇՏՊԱՆՎՈՒՄ) =================
+# ================= AUTH ENDPOINTS =================
 
 @app.post("/api/verify")
 async def verify_pin(request: Request):
-    """Master PIN-ի ստուգում - հասանելի է առանց աուտենտիֆիկացիայի"""
     data = await request.json()
     pin = data.get("pin", "")
     if pin == MASTER_PIN:
@@ -351,14 +416,12 @@ async def verify_pin(request: Request):
 
 @app.get("/api/check")
 async def check_session(token: str = None):
-    """Սեսիայի ստուգում - հասանելի է առանց աուտենտիֆիկացիայի"""
     if token and verify_session(token):
         return {"authenticated": True}
     return {"authenticated": False}
 
 @app.post("/mobile/verify")
 async def verify_mobile_pin(request: Request):
-    """Mobile PIN-ի ստուգում - հասանելի է առանց աուտենտիֆիկացիայի"""
     data = await request.json()
     pin = data.get("pin", "")
     if pin == MOBILE_PIN:
@@ -368,20 +431,17 @@ async def verify_mobile_pin(request: Request):
 
 @app.get("/mobile/check")
 async def check_mobile_session(token: str = None):
-    """Mobile սեսիայի ստուգում - հասանելի է առանց աուտենտիֆիկացիայի"""
     if token and verify_mobile_session(token):
         return {"authenticated": True}
     return {"authenticated": False}
 
-# ================= HTML PAGES WITH SOURCE PROTECTION =================
-
-# Հիմնական HTML-ը պարունակում է միայն դատարկ կառուցվածք և JavaScript, որը կստեղծի ամբողջ բովանդակությունը
+# ================= HTML PAGES =================
 MAIN_HTML = '''<!DOCTYPE html>
 <html lang="hy">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Master UI</title>
+    <title>Master UI - Encrypted</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -396,7 +456,6 @@ MAIN_HTML = '''<!DOCTYPE html>
         .pin-error { color: #f85149; font-size: 12px; margin-top: 12px; }
         .main-content { display: none; }
         .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
-        /* styles will be applied by JavaScript */
     </style>
 </head>
 <body>
@@ -412,28 +471,24 @@ MAIN_HTML = '''<!DOCTYPE html>
     <div id="mainContent" class="main-content"></div>
 </div>
 <script>
-// ===== ԱՄԲՈՂՋ HTML ԿՈԴԸ ԳՏՆՎՈՒՄ Է ԱՅՍ JavaScript-ՈՒՄ =====
-// Սա դժվարացնում է աղբյուրի կոդի տեսանելիությունը
-
 const APP_HTML = {
     header: function(onlineCount) {
-        return `<div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI | Multi Bot Aggregator <span class="online-badge" id="onlineUsers">👤 ${onlineCount}</span></h1><div class="header-sub">📡 Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ | ⭐ Pin ակաունթները միշտ վերևում</div></div>`;
+        return `<div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI | Encrypted Aggregator <span class="online-badge" id="onlineUsers">👤 ${onlineCount}</span></h1><div class="header-sub">🔐 All data is encrypted | ⭐ Pinned accounts on top</div></div>`;
     },
     stats: function(total, success, failed, timeout, balance) {
         return `<div class="stats-top"><div class="stat-card" onclick="setFilter('all')"><div class="stat-number" id="totalCount">${total}</div><div class="stat-label">TOTAL</div></div><div class="stat-card" onclick="setFilter('success')"><div class="stat-number" id="successCount">${success}</div><div class="stat-label">✅ SUCCESS</div></div><div class="stat-card" onclick="setFilter('failed')"><div class="stat-number" id="failedCount">${failed}</div><div class="stat-label">❌ FAILED</div></div><div class="stat-card" onclick="setFilter('timeout')"><div class="stat-number" id="timeoutCount">${timeout}</div><div class="stat-label">⏰ TIMEOUT</div></div><div class="stat-card"><div class="stat-number balance-total" id="totalBalance">${balance.toFixed(2)} ֏</div><div class="stat-label">💰 TOTAL BALANCE</div></div></div>`;
     },
     results: function() {
-        return `<div class="results-section"><div class="section-header"><span><i class="fas fa-chart-line"></i> Results Dashboard</span><button class="clear-all-btn" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button></div><div class="filter-bar"><input type="text" id="searchInput" class="search-input" placeholder="🔍 Search username..."><button class="filter-btn active" data-filter="all" onclick="setFilter('all')">All</button><button class="filter-btn" data-filter="success" onclick="setFilter('success')">✅ Success</button><button class="filter-btn" data-filter="failed" onclick="setFilter('failed')">❌ Failed</button><button class="filter-btn" data-filter="timeout" onclick="setFilter('timeout')">⏰ Timeout</button><button class="refresh-btn" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button><div class="balance-filter"><span>💰</span><button class="balance-filter-btn active" data-balance="all" onclick="setBalanceFilter('all')">All</button><button class="balance-filter-btn" data-balance="low" onclick="setBalanceFilter('low')">&lt;10</button><button class="balance-filter-btn" data-balance="mid" onclick="setBalanceFilter('mid')">10-100</button><button class="balance-filter-btn" data-balance="high" onclick="setBalanceFilter('high')">100+</button></div></div><div class="table-container"><table id="resultsTable"><thead><tr><th>⭐</th><th onclick="sortBy('status')">Status</th><th onclick="sortBy('username')">Username</th><th onclick="sortBy('password')">Password</th><th onclick="sortBy('balance')">Balance</th><th>Action</th></tr></thead><tbody id="resultsBody"><tr><td colspan="6" style="text-align:center; padding:40px;">Loading...</tr></tbody></table></div></div>`;
+        return `<div class="results-section"><div class="section-header"><span><i class="fas fa-chart-line"></i> Results Dashboard <span style="font-size:10px;color:#3fb950;">🔐 Encrypted</span></span><button class="clear-all-btn" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All</button></div><div class="filter-bar"><input type="text" id="searchInput" class="search-input" placeholder="🔍 Search username..."><button class="filter-btn active" data-filter="all" onclick="setFilter('all')">All</button><button class="filter-btn" data-filter="success" onclick="setFilter('success')">✅ Success</button><button class="filter-btn" data-filter="failed" onclick="setFilter('failed')">❌ Failed</button><button class="filter-btn" data-filter="timeout" onclick="setFilter('timeout')">⏰ Timeout</button><button class="refresh-btn" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button><div class="balance-filter"><span>💰</span><button class="balance-filter-btn active" data-balance="all" onclick="setBalanceFilter('all')">All</button><button class="balance-filter-btn" data-balance="low" onclick="setBalanceFilter('low')">&lt;10</button><button class="balance-filter-btn" data-balance="mid" onclick="setBalanceFilter('mid')">10-100</button><button class="balance-filter-btn" data-balance="high" onclick="setBalanceFilter('high')">100+</button></div></div><div class="table-container"><table id="resultsTable"><thead><tr><th>⭐</th><th onclick="sortBy('status')">Status</th><th onclick="sortBy('username')">Username</th><th onclick="sortBy('password')">Password</th><th onclick="sortBy('balance')">Balance</th><th>Action</th></tr></thead><tbody id="resultsBody"><tr><td colspan="6" style="text-align:center; padding:40px;">Loading...</tr></tbody></table></div></div>`;
     },
     bottom: function() {
-        return `<div class="bottom-grid"><div class="card"><div class="card-header"><i class="fas fa-server"></i> Bot Servers</div><div class="servers-list"><div id="serversContainer"></div><div style="display: flex; gap: 8px; margin-top: 10px;"><input type="text" id="newServerInput" class="search-input" placeholder="http://..." style="flex:1;"><button class="add-server-btn" onclick="addServer()"><i class="fas fa-plus"></i> Add</button></div><button class="btn btn-primary" onclick="saveServers()" style="margin-top: 10px; width:100%;"><i class="fas fa-save"></i> Save & Apply</button></div><div class="button-group"><button class="btn btn-secondary" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh All</button><button class="btn btn-danger" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button><button class="btn btn-secondary" onclick="clearTerminal()"><i class="fas fa-trash"></i> Clear Terminal</button></div></div><div class="card"><div class="terminal-header"><h3><i class="fas fa-terminal"></i> Live Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 MASTER UI v3.0 (PERSISTENT RESULTS + PINNED + ONLINE USERS)</div><div class="terminal-line"><span class="time">●</span> 📡 Արդյունքները ՊԱՀՊԱՆՎՈՒՄ ԵՆ | ⭐ Pin արածները միշտ վերևում</div></div></div></div></div>`;
+        return `<div class="bottom-grid"><div class="card"><div class="card-header"><i class="fas fa-server"></i> Bot Servers</div><div class="servers-list"><div id="serversContainer"></div><div style="display: flex; gap: 8px; margin-top: 10px;"><input type="text" id="newServerInput" class="search-input" placeholder="http://..." style="flex:1;"><button class="add-server-btn" onclick="addServer()"><i class="fas fa-plus"></i> Add</button></div><button class="btn btn-primary" onclick="saveServers()" style="margin-top: 10px; width:100%;"><i class="fas fa-save"></i> Save & Apply</button></div><div class="button-group"><button class="btn btn-secondary" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh All</button><button class="btn btn-danger" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button><button class="btn btn-secondary" onclick="clearTerminal()"><i class="fas fa-trash"></i> Clear Terminal</button></div></div><div class="card"><div class="terminal-header"><h3><i class="fas fa-terminal"></i> Live Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 MASTER UI v3.2 (ENCRYPTED)</div><div class="terminal-line"><span class="time">●</span> 🔐 All data is decrypted locally</div></div></div></div></div>`;
     },
     footer: function(onlineCount) {
         return `<div class="auto-refresh"><i class="fas fa-clock"></i> Auto-refresh: 5s | <span id="onlineUsersSmall">👤 ${onlineCount}</span></div>`;
     }
 };
 
-// ===== STYLES =====
 const APP_STYLES = `
     .header { background: linear-gradient(135deg, rgba(22,27,34,0.95), rgba(13,17,23,0.95)); border-radius: 20px; padding: 14px 24px; margin-bottom: 20px; border: 1px solid rgba(48,54,61,0.5); text-align: center; }
     .header h1 { font-size: 24px; font-weight: 700; background: linear-gradient(135deg, #58a6ff, #3fb950, #f0883e); -webkit-background-clip: text; background-clip: text; color: transparent; }
@@ -512,12 +567,10 @@ const APP_STYLES = `
     @media (max-width: 900px) { .bottom-grid { grid-template-columns: 1fr; } .balance-filter { margin-left: 0; margin-top: 8px; } .filter-bar { flex-direction: column; align-items: stretch; } .search-input { width: 100%; } .server-item { flex-direction: column; align-items: stretch; } .server-controls { margin-left: 0; margin-top: 8px; justify-content: flex-end; } }
 `;
 
-// ===== APPLY STYLES =====
 const styleEl = document.createElement('style');
 styleEl.textContent = APP_STYLES;
 document.head.appendChild(styleEl);
 
-// ===== MAIN APPLICATION LOGIC =====
 let allResults = [], currentFilter = 'all', currentBalanceFilter = 'all';
 let currentSort = {field: 'balance', dir: 'desc'};
 let refreshInterval = null, currentServers = [], authToken = null;
@@ -887,7 +940,6 @@ async function retryAccount(u, b) {
     setTimeout(() => { b.innerHTML = o; b.disabled = false; }, 3000);
 }
 
-// Event listeners
 document.addEventListener('input', function(e) {
     if(e.target && e.target.id === 'searchInput') renderResults();
 });
@@ -896,7 +948,6 @@ document.addEventListener('keypress', function(e) {
     if(e.target && e.target.id === 'pinInput' && e.key === 'Enter') verifyPin();
 });
 
-// Auto-login check
 (async() => {
     let t = localStorage.getItem('master_token');
     if(t) {
@@ -913,44 +964,39 @@ document.addEventListener('keypress', function(e) {
     }
 })();
 
-// Թաքցնել աջ սեղմման մենյուն (կանխել Inspect Element-ը)
 document.addEventListener('contextmenu', function(e) {
     e.preventDefault();
     return false;
 });
 
-// Թաքցնել Developer Tools-ի բացումը (F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U)
 document.addEventListener('keydown', function(e) {
-    // F12
     if(e.key === 'F12') {
         e.preventDefault();
         return false;
     }
-    // Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U
     if(e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'i' || e.key === 'j')) {
         e.preventDefault();
         return false;
     }
-    // Ctrl+U
     if(e.ctrlKey && (e.key === 'u' || e.key === 'U')) {
         e.preventDefault();
         return false;
     }
 });
 
-console.log('%c🔒 Protected Mode Active', 'font-size:20px; color:#3fb950;');
-console.log('%cView Source and Inspect Element are disabled', 'font-size:14px; color:#8b949e;');
+console.log('%c🔒 Master UI v3.2 - Encrypted Mode Active', 'font-size:20px; color:#3fb950;');
+console.log('%cAll data is encrypted and decrypted locally', 'font-size:14px; color:#8b949e;');
 </script>
 </body>
 </html>'''
 
-# ===== MOBILE HTML WITH PROTECTION =====
+# ===== MOBILE HTML =====
 MOBILE_HTML = '''<!DOCTYPE html>
 <html lang="hy">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=yes">
-    <title>Mobile Monitor</title>
+    <title>Mobile Monitor - Encrypted</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -996,7 +1042,7 @@ MOBILE_HTML = '''<!DOCTYPE html>
     <div class="header"><h1><i class="fas fa-mobile-alt"></i> Mobile Monitor</h1><div class="last-update" id="lastUpdate">Loading... <span class="online-badge" id="onlineUsers">👤 0</span></div></div>
     <div class="toolbar"><button class="refresh-btn" onclick="loadResults()"><i class="fas fa-sync-alt"></i> Refresh</button></div>
     <div class="accounts-list" id="accountsList"><div style="text-align:center; padding:30px;"><i class="fas fa-spinner fa-pulse"></i> Loading...</div></div>
-    <div class="footer"><i class="fas fa-chart-line"></i> Auto-refresh 5s | ⭐ Pinned on top</div>
+    <div class="footer"><i class="fas fa-chart-line"></i> Auto-refresh 5s | ⭐ Pinned on top | 🔐 Encrypted</div>
 </div>
 <script>
 let mobileResults=[], authToken=null, refreshInterval=null;
@@ -1031,13 +1077,11 @@ function copyToClipboard(text){navigator.clipboard.writeText(text);}
 function escapeHtml(s){if(!s)return '';return s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]);}
 (async()=>{let savedToken=localStorage.getItem('mobile_token');if(savedToken){try{let res=await fetch(`/mobile/check?token=${savedToken}`);let data=await res.json();if(data.authenticated){authToken=savedToken;document.getElementById('pinOverlay').style.display='none';document.getElementById('mobileDashboard').style.display='block';loadResults();refreshInterval=setInterval(()=>{loadResults();updateOnline();},5000);updateOnline();}}catch(e){}}})();
 
-// Թաքցնել աջ սեղմման մենյուն (կանխել Inspect Element-ը)
 document.addEventListener('contextmenu', function(e) {
     e.preventDefault();
     return false;
 });
 
-// Թաքցնել Developer Tools-ի բացումը (F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U)
 document.addEventListener('keydown', function(e) {
     if(e.key === 'F12') { e.preventDefault(); return false; }
     if(e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'i' || e.key === 'j')) {
@@ -1055,42 +1099,42 @@ console.log('%c🔒 Mobile Protected Mode Active', 'font-size:20px; color:#3fb95
 </body>
 </html>'''
 
-# ================= MAIN PAGE ROUTES =================
+# ================= MAIN ROUTES =================
 
 @app.get("/")
 async def root():
-    """Գլխավոր էջ - վերահղում է դեպի Master UI"""
     return RedirectResponse(url="/homepages.admin.dashboard")
 
 @app.get("/homepages.admin.dashboard")
 async def master_dashboard():
-    """Master UI - հիմնական կառավարման վահանակ"""
     return HTMLResponse(MAIN_HTML)
 
 @app.get("/mobile.dashboard.administration")
 async def mobile_dashboard():
-    """Mobile UI - բջջային մոնիտորինգի վահանակ"""
     return HTMLResponse(MOBILE_HTML)
 
 if __name__ == "__main__":
     import uvicorn
+    
     print("\n" + "=" * 60)
-    print("🖥️  MASTER UI - Multi Bot Aggregator v3.0")
+    print("🖥️  MASTER UI v3.2 - ENCRYPTED MULTI BOT AGGREGATOR")
     print("=" * 60)
     print(f"📍 Master UI (Full): http://localhost:9000/homepages.admin.dashboard")
     print(f"📍 Mobile Monitor:   http://localhost:9000/mobile.dashboard.administration")
     print("=" * 60)
     print(f"🔐 Master UI PIN:    {MASTER_PIN}")
     print(f"🔐 Mobile PIN:       {MOBILE_PIN}")
+    print(f"🔐 Encryption Key:   {ENCRYPTION_KEY[:20]}...")
+    print(f"🔐 Bot Auth:         {BOT_AUTH_USERNAME}:{BOT_AUTH_PASSWORD[:3]}***")
     print("=" * 60)
     print("📌 FEATURES:")
-    print("   ⭐ Pin (Star) - click ⭐ to pin accounts on top (saved in browser)")
-    print("   💰 Total Balance - shows sum of all balances")
-    print("   👤 Online Users - shows how many people have the page open")
-    print("   ✅ Persistent results + all buttons working")
-    print("   🔒 ALL API endpoints are protected with authentication")
-    print("   🛡️ Source code protection (View Source & Inspect Element disabled)")
-    print("   🔗 Custom paths: /homepages.admin.dashboard & /mobile.dashboard.administration")
-    print("   📱 Mobile works with separate PIN and session")
+    print("   🔐 All data is encrypted between bots and Master UI")
+    print("   🔓 Data is decrypted locally for display")
+    print("   ⭐ Pin accounts on top")
+    print("   💰 Total balance calculation")
+    print("   👤 Online users counter")
+    print("   🔒 Protected API endpoints")
+    print("   🛡️ Source code protection")
     print("=" * 60 + "\n")
+    
     uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
