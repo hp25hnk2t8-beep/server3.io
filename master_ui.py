@@ -43,11 +43,13 @@ BOT_AUTH_PASSWORD = os.getenv("BOT_AUTH_PASSWORD", "King2002")
 # ================= PIN ԿԱՐԳԱՎՈՐՈՒՄ =================
 MASTER_PIN = os.getenv("MASTER_PIN", "285925")
 MOBILE_PIN = os.getenv("MOBILE_PIN", "185659")
+LIVE_ADMIN_PIN = os.getenv("LIVE_ADMIN_PIN", "123456")  # New PIN for Live Administrator
 # ====================================================
 
 # ================= ՍԵՍԻԱՆԵՐԻ ԿԱՌԱՎԱՐՈՒՄ =================
 sessions = {}
 mobile_sessions = {}
+live_admin_sessions = {}
 
 def create_session() -> str:
     token = secrets.token_urlsafe(32)
@@ -75,6 +77,19 @@ def verify_mobile_session(token: str) -> bool:
         return False
     return True
 
+def create_live_admin_session() -> str:
+    token = secrets.token_urlsafe(32)
+    live_admin_sessions[token] = datetime.now() + timedelta(hours=24)
+    return token
+
+def verify_live_admin_session(token: str) -> bool:
+    if token not in live_admin_sessions:
+        return False
+    if live_admin_sessions[token] < datetime.now():
+        del live_admin_sessions[token]
+        return False
+    return True
+
 # ================= AUTH DEPENDENCIES =================
 async def get_current_user(token: Optional[str] = None) -> str:
     if not token:
@@ -96,6 +111,13 @@ async def get_any_user(token: Optional[str] = None) -> str:
     if verify_session(token) or verify_mobile_session(token):
         return token
     raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+async def get_live_admin_user(token: Optional[str] = None) -> str:
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authentication token")
+    if not verify_live_admin_session(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return token
 
 # ================= ONLINE USERS =================
 online_users = {}
@@ -268,6 +290,21 @@ async def get_merged_results(token: str = Depends(get_any_user)):
     """Արդյունքները ստանալու համար պահանջվում է աուտենտիֆիկացիա"""
     return await fetch_and_merge_results(use_encrypted=True)
 
+@app.get("/results/public")
+async def get_public_results():
+    """Public endpoint for live_administrator - no auth required, returns only username and balance"""
+    results = await fetch_and_merge_results(use_encrypted=True)
+    # Filter to only show username and balance
+    filtered = []
+    for account in results:
+        filtered.append({
+            "username": account.get("username", ""),
+            "balance": account.get("balance", "0 ֏"),
+            "balance_value": account.get("balance_value", 0.0),
+            "status": account.get("status", "❌")
+        })
+    return filtered
+
 @app.post("/results/clear")
 async def clear_all_results(token: str = Depends(get_current_user)):
     global cached_results
@@ -435,7 +472,333 @@ async def check_mobile_session(token: str = None):
         return {"authenticated": True}
     return {"authenticated": False}
 
+# ================= LIVE ADMIN AUTH ENDPOINTS =================
+
+@app.post("/live/verify")
+async def verify_live_admin_pin(request: Request):
+    data = await request.json()
+    pin = data.get("pin", "")
+    if pin == LIVE_ADMIN_PIN:
+        token = create_live_admin_session()
+        return {"success": True, "token": token}
+    return {"success": False}
+
+@app.get("/live/check")
+async def check_live_admin_session(token: str = None):
+    if token and verify_live_admin_session(token):
+        return {"authenticated": True}
+    return {"authenticated": False}
+
 # ================= HTML PAGES =================
+
+# ===== LIVE ADMINISTRATOR HTML (PIN Protected, No Password Visible) =====
+LIVE_ADMIN_HTML = '''<!DOCTYPE html>
+<html lang="hy">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Live Administrator - Encrypted</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { background: #0a0c10; color: #e6edf3; font-family: 'Inter', sans-serif; min-height: 100vh; }
+        #app { min-height: 100vh; }
+        .pin-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.95); backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .pin-box { background: #161b22; border: 1px solid #30363d; border-radius: 24px; padding: 40px; width: 320px; text-align: center; }
+        .pin-box h2 { margin-bottom: 24px; background: linear-gradient(135deg, #58a6ff, #3fb950); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        .pin-box input { width: 100%; padding: 12px; margin: 8px 0; background: #0d1117; border: 1px solid #30363d; border-radius: 12px; color: white; font-size: 18px; text-align: center; letter-spacing: 6px; }
+        .pin-box button { width: 100%; padding: 12px; background: linear-gradient(135deg, #238636, #2ea043); border: none; border-radius: 12px; color: white; font-weight: bold; cursor: pointer; margin-top: 16px; }
+        .pin-error { color: #f85149; font-size: 12px; margin-top: 12px; }
+        .main-content { display: none; }
+        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, rgba(22,27,34,0.95), rgba(13,17,23,0.95)); border-radius: 20px; padding: 14px 24px; margin-bottom: 20px; border: 1px solid rgba(48,54,61,0.5); text-align: center; }
+        .header h1 { font-size: 24px; font-weight: 700; background: linear-gradient(135deg, #58a6ff, #3fb950, #f0883e); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        .header-sub { font-size: 12px; color: #8b949e; margin-top: 4px; }
+        .online-badge { background: transparent; padding: 2px 12px; border-radius: 20px; font-size: 12px; color: #58a6ff; border: 1px solid #30363d; margin-left: 8px; }
+        .stats-top { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
+        .stat-card { background: #161b22; border-radius: 14px; padding: 10px 12px; text-align: center; border: 1px solid #30363d; transition: all 0.2s; }
+        .stat-card:hover { border-color: #58a6ff; background: #1a1f2e; transform: translateY(-2px); }
+        .stat-number { font-size: 22px; font-weight: 700; color: #58a6ff; }
+        .stat-number.balance-total { color: #f0883e; }
+        .stat-label { font-size: 10px; color: #8b949e; margin-top: 3px; }
+        .results-section { background: #161b22; border-radius: 20px; border: 1px solid #30363d; overflow: hidden; margin-bottom: 20px; }
+        .section-header { padding: 14px 20px; background: #0d1117; border-bottom: 1px solid #30363d; font-weight: 600; font-size: 15px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+        .filter-bar { display: flex; gap: 10px; padding: 12px 20px; background: #0d1117; border-bottom: 1px solid #21262d; flex-wrap: wrap; align-items: center; }
+        .search-input { padding: 6px 14px; background: #010409; border: 1px solid #30363d; border-radius: 30px; color: white; width: 220px; font-size: 12px; }
+        .search-input::placeholder { color: #6e7681; }
+        .refresh-btn { padding: 5px 14px; background: #1f6feb; border: none; border-radius: 30px; color: white; cursor: pointer; font-size: 11px; }
+        .refresh-btn:hover { background: #388bfd; }
+        .accounts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+        .account-card { background: #161b22; border-radius: 16px; border: 1px solid #30363d; overflow: hidden; transition: all 0.2s; }
+        .account-card:hover { border-color: #58a6ff; transform: translateY(-2px); }
+        .account-card .card-header { padding: 12px 16px; background: #0d1117; border-bottom: 1px solid #21262d; display: flex; justify-content: space-between; align-items: center; }
+        .account-card .username { font-size: 15px; font-weight: 600; color: #58a6ff; word-break: break-all; }
+        .account-card .status-badge { font-size: 18px; }
+        .account-card .card-body { padding: 12px 16px; }
+        .account-card .balance { font-size: 28px; font-weight: 700; }
+        .account-card .balance-positive { color: #3fb950; }
+        .account-card .balance-medium { color: #d29922; }
+        .account-card .balance-zero { color: #f85149; }
+        .account-card .balance-label { font-size: 10px; color: #8b949e; margin-bottom: 2px; }
+        .copy-btn { background: transparent; border: 1px solid #30363d; border-radius: 16px; padding: 2px 8px; color: #58a6ff; cursor: pointer; font-size: 10px; }
+        .copy-btn:hover { background: #30363d; }
+        .footer { text-align: center; padding: 16px; font-size: 10px; color: #6e7681; border-top: 1px solid #21262d; margin-top: 20px; }
+        .no-results { text-align: center; padding: 60px 20px; color: #6e7681; grid-column: 1/-1; }
+        .no-results i { font-size: 40px; margin-bottom: 16px; color: #30363d; }
+        .autorefresh-info { font-size: 11px; color: #6e7681; }
+        .live-admin-link { background: transparent; border: 1px solid #30363d; border-radius: 20px; padding: 3px 12px; color: #58a6ff; cursor: pointer; font-size: 11px; margin-left: 8px; transition: all 0.2s; text-decoration: none; display: inline-block; }
+        .live-admin-link:hover { background: #30363d; border-color: #58a6ff; }
+        @media (max-width: 900px) { .stats-top { grid-template-columns: repeat(3, 1fr); } .accounts-grid { grid-template-columns: 1fr; } .filter-bar { flex-direction: column; align-items: stretch; } .search-input { width: 100%; } }
+    </style>
+</head>
+<body>
+<div id="app">
+    <div id="pinOverlay" class="pin-overlay">
+        <div class="pin-box">
+            <h2><i class="fas fa-eye"></i> Live Admin Access</h2>
+            <input type="password" id="pinInput" placeholder="PIN" maxlength="6" autofocus>
+            <button onclick="verifyPin()"><i class="fas fa-unlock-alt"></i> Access</button>
+            <div id="pinError" class="pin-error"></div>
+        </div>
+    </div>
+    <div id="mainContent" class="main-content">
+        <div class="container">
+            <div class="header">
+                <h1><i class="fas fa-eye"></i> Live Administrator <span class="online-badge" id="onlineUsers">👤 0</span></h1>
+                <div class="header-sub">
+                    <i class="fas fa-lock"></i> Encrypted | 
+                    <span id="lastUpdate">Loading...</span> | 
+                    <i class="fas fa-user-secret"></i> Passwords hidden
+                </div>
+            </div>
+
+            <div class="stats-top" id="statsTop">
+                <div class="stat-card"><div class="stat-number" id="totalAccounts">0</div><div class="stat-label">📊 Total</div></div>
+                <div class="stat-card"><div class="stat-number" id="successAccounts">0</div><div class="stat-label">✅ Success</div></div>
+                <div class="stat-card"><div class="stat-number" id="failedAccounts">0</div><div class="stat-label">❌ Failed</div></div>
+                <div class="stat-card"><div class="stat-number" id="timeoutAccounts">0</div><div class="stat-label">⏰ Timeout</div></div>
+                <div class="stat-card"><div class="stat-number balance-total" id="totalBalance">0</div><div class="stat-label">💰 Total Balance</div></div>
+            </div>
+
+            <div class="results-section">
+                <div class="section-header">
+                    <span><i class="fas fa-chart-line"></i> Live Results <span style="font-size:10px;color:#3fb950;">🔐 Encrypted</span></span>
+                    <button class="refresh-btn" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button>
+                </div>
+                <div class="filter-bar">
+                    <input type="text" id="searchInput" class="search-input" placeholder="🔍 Search username..." oninput="filterResults()">
+                    <button class="refresh-btn" onclick="loadResults()"><i class="fas fa-sync-alt"></i> Refresh</button>
+                    <span class="autorefresh-info"><i class="fas fa-clock"></i> Auto-refresh: 5s</span>
+                </div>
+                <div class="accounts-grid" id="accountsGrid">
+                    <div class="no-results"><i class="fas fa-spinner fa-pulse"></i><div>Loading accounts...</div></div>
+                </div>
+            </div>
+
+            <div class="footer">
+                <i class="fas fa-chart-line"></i> 
+                <span id="footerCount">0</span> accounts | 
+                <i class="fas fa-lock"></i> Passwords hidden for security | 
+                <i class="fas fa-clock"></i> Auto-refresh 5s
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+let liveResults = [], authToken = null, refreshInterval = null;
+
+async function verifyPin() {
+    let p = document.getElementById('pinInput').value;
+    if(!p) { document.getElementById('pinError').innerText = 'Enter PIN'; return; }
+    try {
+        let r = await fetch('/live/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin:p})});
+        let d = await r.json();
+        if(d.success) {
+            authToken = d.token;
+            localStorage.setItem('live_admin_token', authToken);
+            document.getElementById('pinOverlay').style.display = 'none';
+            document.getElementById('mainContent').style.display = 'block';
+            initializeApp();
+        } else {
+            document.getElementById('pinError').innerText = 'Invalid PIN';
+            document.getElementById('pinInput').value = '';
+        }
+    } catch(e) {
+        document.getElementById('pinError').innerText = 'Connection error';
+    }
+}
+
+function initializeApp() {
+    loadResults();
+    updateOnline();
+    refreshInterval = setInterval(() => {
+        loadResults();
+        updateOnline();
+    }, 5000);
+}
+
+async function loadResults() {
+    try {
+        const res = await fetch('/results/public');
+        if (res.ok) {
+            liveResults = await res.json();
+            renderResults();
+            updateStats();
+            document.getElementById('lastUpdate').innerHTML = '🕐 ' + new Date().toLocaleTimeString();
+        } else {
+            document.getElementById('accountsGrid').innerHTML = `
+                <div class="no-results">
+                    <i class="fas fa-exclamation-triangle" style="color:#f85149;"></i>
+                    <div style="color:#f85149;">Error loading results</div>
+                </div>
+            `;
+        }
+    } catch (e) {
+        console.error('Load error:', e);
+    }
+}
+
+async function updateOnline() {
+    try {
+        const res = await fetch('/api/online');
+        const data = await res.json();
+        document.getElementById('onlineUsers').innerHTML = '👤 ' + data.online;
+    } catch(e) {}
+}
+
+function renderResults() {
+    const grid = document.getElementById('accountsGrid');
+    const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+    
+    let filtered = liveResults;
+    if (searchTerm) {
+        filtered = liveResults.filter(r => r.username.toLowerCase().includes(searchTerm));
+    }
+    
+    // Sort by balance descending
+    filtered.sort((a, b) => (parseFloat(b.balance_value) || 0) - (parseFloat(a.balance_value) || 0));
+    
+    if (filtered.length === 0) {
+        grid.innerHTML = `
+            <div class="no-results">
+                <i class="fas fa-inbox"></i>
+                <div>No results found${searchTerm ? ' for "' + searchTerm + '"' : ''}</div>
+            </div>
+        `;
+        return;
+    }
+    
+    const balanceClass = (v) => {
+        const n = parseFloat(v) || 0;
+        return n > 100 ? 'balance-positive' : n > 10 ? 'balance-medium' : 'balance-zero';
+    };
+    
+    grid.innerHTML = filtered.map(acc => `
+        <div class="account-card">
+            <div class="card-header">
+                <span class="username">
+                    <i class="fas fa-user-circle" style="margin-right:6px; color:#58a6ff;"></i>
+                    ${escapeHtml(acc.username)}
+                </span>
+                <span class="status-badge">${acc.status}</span>
+            </div>
+            <div class="card-body">
+                <div class="balance-label"><i class="fas fa-coins"></i> Balance</div>
+                <div class="balance ${balanceClass(acc.balance_value)}">
+                    ${acc.balance || '0 ֏'}
+                </div>
+                <div style="margin-top:8px;">
+                    <button class="copy-btn" onclick="copyToClipboard('${escapeHtml(acc.username)}')">
+                        <i class="fas fa-copy"></i> Copy Username
+                    </button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function updateStats() {
+    const total = liveResults.length;
+    const success = liveResults.filter(r => r.status === '✅').length;
+    const failed = liveResults.filter(r => r.status === '❌').length;
+    const timeout = liveResults.filter(r => r.status === '⏰').length;
+    const totalBal = liveResults.reduce((sum, r) => sum + (parseFloat(r.balance_value) || 0), 0);
+    
+    document.getElementById('totalAccounts').textContent = total;
+    document.getElementById('successAccounts').textContent = success;
+    document.getElementById('failedAccounts').textContent = failed;
+    document.getElementById('timeoutAccounts').textContent = timeout;
+    document.getElementById('totalBalance').textContent = totalBal.toFixed(2) + ' ֏';
+    document.getElementById('footerCount').textContent = total;
+}
+
+function filterResults() {
+    renderResults();
+}
+
+function manualRefresh() {
+    loadResults();
+    updateOnline();
+}
+
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text);
+    const btns = document.querySelectorAll('.copy-btn');
+    btns.forEach(btn => {
+        if (btn.textContent.includes('Copied')) return;
+        const original = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+        setTimeout(() => btn.innerHTML = original, 2000);
+    });
+}
+
+function escapeHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]);
+}
+
+// Check for existing session
+(async() => {
+    let savedToken = localStorage.getItem('live_admin_token');
+    if(savedToken) {
+        try {
+            let r = await fetch(`/live/check?token=${savedToken}`);
+            let d = await r.json();
+            if(d.authenticated) {
+                authToken = savedToken;
+                document.getElementById('pinOverlay').style.display = 'none';
+                document.getElementById('mainContent').style.display = 'block';
+                initializeApp();
+            }
+        } catch(e) {}
+    }
+})();
+
+document.addEventListener('keypress', function(e) {
+    if(e.target && e.target.id === 'pinInput' && e.key === 'Enter') verifyPin();
+});
+
+// Disable right click and dev tools
+document.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'F12') { e.preventDefault(); return false; }
+    if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'i' || e.key === 'j')) {
+        e.preventDefault();
+        return false;
+    }
+    if (e.ctrlKey && (e.key === 'u' || e.key === 'U')) {
+        e.preventDefault();
+        return false;
+    }
+});
+
+console.log('%c🔒 Live Administrator - Encrypted Mode Active', 'font-size:20px; color:#3fb950;');
+console.log('%cPasswords are hidden for security', 'font-size:14px; color:#8b949e;');
+</script>
+</body>
+</html>'''
+
 MAIN_HTML = '''<!DOCTYPE html>
 <html lang="hy">
 <head>
@@ -456,6 +819,8 @@ MAIN_HTML = '''<!DOCTYPE html>
         .pin-error { color: #f85149; font-size: 12px; margin-top: 12px; }
         .main-content { display: none; }
         .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+        .live-admin-link { background: transparent; border: 1px solid #30363d; border-radius: 20px; padding: 4px 14px; color: #58a6ff; cursor: pointer; font-size: 12px; margin-left: 10px; transition: all 0.2s; text-decoration: none; display: inline-block; }
+        .live-admin-link:hover { background: #30363d; border-color: #58a6ff; }
     </style>
 </head>
 <body>
@@ -473,7 +838,7 @@ MAIN_HTML = '''<!DOCTYPE html>
 <script>
 const APP_HTML = {
     header: function(onlineCount) {
-        return `<div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI | Encrypted Aggregator <span class="online-badge" id="onlineUsers">👤 ${onlineCount}</span></h1><div class="header-sub">🔐 All data is encrypted | ⭐ Pinned accounts on top</div></div>`;
+        return `<div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI | Encrypted Aggregator <span class="online-badge" id="onlineUsers">👤 ${onlineCount}</span></h1><div class="header-sub">🔐 All data is encrypted | ⭐ Pinned accounts on top <a href="/live_administrator" target="_blank" class="live-admin-link"><i class="fas fa-eye"></i> Live Admin (PIN)</a></div></div>`;
     },
     stats: function(total, success, failed, timeout, balance) {
         return `<div class="stats-top"><div class="stat-card" onclick="setFilter('all')"><div class="stat-number" id="totalCount">${total}</div><div class="stat-label">TOTAL</div></div><div class="stat-card" onclick="setFilter('success')"><div class="stat-number" id="successCount">${success}</div><div class="stat-label">✅ SUCCESS</div></div><div class="stat-card" onclick="setFilter('failed')"><div class="stat-number" id="failedCount">${failed}</div><div class="stat-label">❌ FAILED</div></div><div class="stat-card" onclick="setFilter('timeout')"><div class="stat-number" id="timeoutCount">${timeout}</div><div class="stat-label">⏰ TIMEOUT</div></div><div class="stat-card"><div class="stat-number balance-total" id="totalBalance">${balance.toFixed(2)} ֏</div><div class="stat-label">💰 TOTAL BALANCE</div></div></div>`;
@@ -485,7 +850,7 @@ const APP_HTML = {
         return `<div class="bottom-grid"><div class="card"><div class="card-header"><i class="fas fa-server"></i> Bot Servers</div><div class="servers-list"><div id="serversContainer"></div><div style="display: flex; gap: 8px; margin-top: 10px;"><input type="text" id="newServerInput" class="search-input" placeholder="http://..." style="flex:1;"><button class="add-server-btn" onclick="addServer()"><i class="fas fa-plus"></i> Add</button></div><button class="btn btn-primary" onclick="saveServers()" style="margin-top: 10px; width:100%;"><i class="fas fa-save"></i> Save & Apply</button></div><div class="button-group"><button class="btn btn-secondary" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh All</button><button class="btn btn-danger" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear All Results</button><button class="btn btn-secondary" onclick="clearTerminal()"><i class="fas fa-trash"></i> Clear Terminal</button></div></div><div class="card"><div class="terminal-header"><h3><i class="fas fa-terminal"></i> Live Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 MASTER UI v3.2 (ENCRYPTED)</div><div class="terminal-line"><span class="time">●</span> 🔐 All data is decrypted locally</div></div></div></div></div>`;
     },
     footer: function(onlineCount) {
-        return `<div class="auto-refresh"><i class="fas fa-clock"></i> Auto-refresh: 5s | <span id="onlineUsersSmall">👤 ${onlineCount}</span></div>`;
+        return `<div class="auto-refresh"><i class="fas fa-clock"></i> Auto-refresh: 5s | <span id="onlineUsersSmall">👤 ${onlineCount}</span> | <a href="/live_administrator" target="_blank" style="color:#58a6ff; text-decoration:none;"><i class="fas fa-eye"></i> Live Admin</a></div>`;
     }
 };
 
@@ -564,6 +929,8 @@ const APP_STYLES = `
     .btn-secondary { background: #6e7681; color: white; }
     .btn-danger { background: #da3633; color: white; }
     .auto-refresh { position: fixed; bottom: 20px; right: 20px; background: #161b22; padding: 6px 12px; border-radius: 20px; font-size: 10px; border: 1px solid #30363d; }
+    .live-admin-link { background: transparent; border: 1px solid #30363d; border-radius: 20px; padding: 3px 12px; color: #58a6ff; cursor: pointer; font-size: 11px; margin-left: 8px; transition: all 0.2s; text-decoration: none; display: inline-block; }
+    .live-admin-link:hover { background: #30363d; border-color: #58a6ff; }
     @media (max-width: 900px) { .bottom-grid { grid-template-columns: 1fr; } .balance-filter { margin-left: 0; margin-top: 8px; } .filter-bar { flex-direction: column; align-items: stretch; } .search-input { width: 100%; } .server-item { flex-direction: column; align-items: stretch; } .server-controls { margin-left: 0; margin-top: 8px; justify-content: flex-end; } }
 `;
 
@@ -1113,17 +1480,25 @@ async def master_dashboard():
 async def mobile_dashboard():
     return HTMLResponse(MOBILE_HTML)
 
+# ================= NEW: LIVE ADMINISTRATOR PAGE =================
+@app.get("/live_administrator")
+async def live_administrator():
+    """Public page showing only usernames and balances - no password visible, PIN protected"""
+    return HTMLResponse(LIVE_ADMIN_HTML)
+
 if __name__ == "__main__":
     import uvicorn
     
     print("\n" + "=" * 60)
     print("🖥️  MASTER UI v3.2 - ENCRYPTED MULTI BOT AGGREGATOR")
     print("=" * 60)
-    print(f"📍 Master UI (Full): http://localhost:9000/homepages.admin.dashboard")
-    print(f"📍 Mobile Monitor:   http://localhost:9000/mobile.dashboard.administration")
+    print(f"📍 Master UI (Full):     http://localhost:9000/homepages.admin.dashboard")
+    print(f"📍 Mobile Monitor:       http://localhost:9000/mobile.dashboard.administration")
+    print(f"📍 Live Administrator:   http://localhost:9000/live_administrator")
     print("=" * 60)
     print(f"🔐 Master UI PIN:    {MASTER_PIN}")
     print(f"🔐 Mobile PIN:       {MOBILE_PIN}")
+    print(f"🔐 Live Admin PIN:   {LIVE_ADMIN_PIN}")
     print(f"🔐 Encryption Key:   {ENCRYPTION_KEY[:20]}...")
     print(f"🔐 Bot Auth:         {BOT_AUTH_USERNAME}:{BOT_AUTH_PASSWORD[:3]}***")
     print("=" * 60)
@@ -1135,6 +1510,7 @@ if __name__ == "__main__":
     print("   👤 Online users counter")
     print("   🔒 Protected API endpoints")
     print("   🛡️ Source code protection")
+    print("   👁️  Live Administrator (PIN protected, no passwords)")
     print("=" * 60 + "\n")
     
     uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
