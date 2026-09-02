@@ -1,4 +1,4 @@
-# ================= MASTER UI V3.4 - FINAL PERFECT =================
+# ================= MASTER UI V3.5 - FIXED PROGRESS =================
 import os
 import httpx
 import asyncio
@@ -204,7 +204,7 @@ def save_cached_results(results: Dict[str, Dict]):
 
 BOT_SERVERS = load_servers()
 
-app = FastAPI(title="Master UI - Final Perfect")
+app = FastAPI(title="Master UI - Fixed Progress")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # ================= CACHE =================
@@ -328,12 +328,12 @@ async def health(token: str = Depends(get_any_user)):
                 res = await client.get(f"{server}/health", timeout=3)
                 if res.status_code == 200:
                     data = res.json()
-                    is_running = data.get("current_index", 0) > 0 and data.get("total", 0) > 0
+                    is_running = data.get("processed", 0) > 0 and data.get("total", 0) > 0
                     statuses.append({
                         "server": server, 
                         "status": "online",
                         "running": is_running,
-                        "current_index": data.get("current_index", 0),
+                        "processed": data.get("processed", 0),  # current_index -> processed
                         "total": data.get("total", 0),
                         "encryption": data.get("encryption", "enabled")
                     })
@@ -487,112 +487,13 @@ async def check_live_admin_session(token: str = None):
 
 # ================= HTML PAGES =================
 
-# ===== LIVE ADMINISTRATOR HTML =====
-LIVE_ADMIN_HTML = '''<!DOCTYPE html>
-<html lang="hy">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Live Admin</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        *{margin:0;padding:0;box-sizing:border-box}
-        body{background:#0a0c10;color:#e6edf3;font-family:'Inter',sans-serif;min-height:100vh}
-        .pin-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.95);backdrop-filter:blur(12px);display:flex;align-items:center;justify-content:center;z-index:1000}
-        .pin-box{background:#161b22;border:1px solid #30363d;border-radius:24px;padding:40px;width:320px;text-align:center}
-        .pin-box h2{margin-bottom:24px;background:linear-gradient(135deg,#58a6ff,#3fb950);-webkit-background-clip:text;background-clip:text;color:transparent}
-        .pin-box input{width:100%;padding:12px;background:#0d1117;border:1px solid #30363d;border-radius:12px;color:#fff;font-size:18px;text-align:center;letter-spacing:6px}
-        .pin-box button{width:100%;padding:12px;background:linear-gradient(135deg,#238636,#2ea043);border:none;border-radius:12px;color:#fff;font-weight:bold;cursor:pointer;margin-top:16px}
-        .pin-error{color:#f85149;font-size:12px;margin-top:12px}
-        .main-content{display:none}
-        .container{max-width:1600px;margin:0 auto;padding:20px}
-        .header{background:linear-gradient(135deg,rgba(22,27,34,0.95),rgba(13,17,23,0.95));border-radius:20px;padding:14px 24px;margin-bottom:20px;border:1px solid rgba(48,54,61,0.5);text-align:center}
-        .header h1{font-size:24px;font-weight:700;background:linear-gradient(135deg,#58a6ff,#3fb950,#f0883e);-webkit-background-clip:text;background-clip:text;color:transparent}
-        .header-sub{font-size:12px;color:#8b949e;margin-top:4px}
-        .online-badge{background:transparent;padding:2px 12px;border-radius:20px;font-size:12px;color:#58a6ff;border:1px solid #30363d}
-        .stats-top{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
-        .stat-card{background:#161b22;border-radius:14px;padding:10px 12px;text-align:center;border:1px solid #30363d;transition:all 0.2s}
-        .stat-card:hover{border-color:#58a6ff;background:#1a1f2e}
-        .stat-number{font-size:22px;font-weight:700;color:#58a6ff}
-        .stat-number.balance-total{color:#f0883e}
-        .stat-label{font-size:10px;color:#8b949e;margin-top:3px}
-        .results-section{background:#161b22;border-radius:20px;border:1px solid #30363d;overflow:hidden;margin-bottom:20px}
-        .section-header{padding:14px 20px;background:#0d1117;border-bottom:1px solid #30363d;font-weight:600;font-size:15px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
-        .filter-bar{padding:12px 20px;background:#0d1117;border-bottom:1px solid #21262d;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
-        .search-input{padding:6px 14px;background:#010409;border:1px solid #30363d;border-radius:30px;color:#fff;width:220px;font-size:12px}
-        .refresh-btn{padding:5px 14px;background:#1f6feb;border:none;border-radius:30px;color:#fff;cursor:pointer;font-size:11px}
-        .refresh-btn:hover{background:#388bfd}
-        .accounts-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
-        .account-card{background:#161b22;border-radius:16px;border:1px solid #30363d;overflow:hidden;transition:all 0.2s}
-        .account-card:hover{border-color:#58a6ff;transform:translateY(-2px)}
-        .account-card .card-header{padding:12px 16px;background:#0d1117;border-bottom:1px solid #21262d;display:flex;justify-content:space-between;align-items:center}
-        .account-card .username{font-size:15px;font-weight:600;color:#58a6ff;word-break:break-all}
-        .account-card .status-badge{font-size:18px}
-        .account-card .card-body{padding:12px 16px}
-        .account-card .balance{font-size:28px;font-weight:700}
-        .balance-positive{color:#3fb950}
-        .balance-medium{color:#d29922}
-        .balance-zero{color:#f85149}
-        .balance-label{font-size:10px;color:#8b949e;margin-bottom:2px}
-        .copy-btn{background:transparent;border:1px solid #30363d;border-radius:16px;padding:2px 8px;color:#58a6ff;cursor:pointer;font-size:10px}
-        .copy-btn:hover{background:#30363d}
-        .footer{text-align:center;padding:16px;font-size:10px;color:#6e7681;border-top:1px solid #21262d;margin-top:20px}
-        .no-results{text-align:center;padding:60px 20px;color:#6e7681;grid-column:1/-1}
-        .no-results i{font-size:40px;margin-bottom:16px;color:#30363d}
-        .autorefresh-info{font-size:11px;color:#6e7681}
-        @media(max-width:900px){.stats-top{grid-template-columns:repeat(3,1fr)}.accounts-grid{grid-template-columns:1fr}.filter-bar{flex-direction:column;align-items:stretch}.search-input{width:100%}}
-    </style>
-</head>
-<body>
-<div id="pinOverlay" class="pin-overlay">
-    <div class="pin-box"><h2><i class="fas fa-eye"></i> Live Admin</h2>
-    <input type="password" id="pinInput" placeholder="PIN" maxlength="6" autofocus>
-    <button onclick="verifyPin()"><i class="fas fa-unlock-alt"></i> Access</button>
-    <div id="pinError" class="pin-error"></div></div>
-</div>
-<div id="mainContent" class="main-content"><div class="container">
-    <div class="header"><h1><i class="fas fa-eye"></i> Live Administrator <span class="online-badge" id="onlineUsers">👤 0</span></h1>
-    <div class="header-sub"><i class="fas fa-lock"></i> Encrypted | <span id="lastUpdate">Loading...</span> | <i class="fas fa-user-secret"></i> Passwords hidden</div></div>
-    <div class="stats-top"><div class="stat-card"><div class="stat-number" id="totalAccounts">0</div><div class="stat-label">📊 Total</div></div>
-    <div class="stat-card"><div class="stat-number" id="successAccounts">0</div><div class="stat-label">✅ Success</div></div>
-    <div class="stat-card"><div class="stat-number" id="failedAccounts">0</div><div class="stat-label">❌ Failed</div></div>
-    <div class="stat-card"><div class="stat-number" id="timeoutAccounts">0</div><div class="stat-label">⏰ Timeout</div></div>
-    <div class="stat-card"><div class="stat-number balance-total" id="totalBalance">0</div><div class="stat-label">💰 Total Balance</div></div></div>
-    <div class="results-section"><div class="section-header"><span><i class="fas fa-chart-line"></i> Live Results <span style="font-size:10px;color:#3fb950;">🔐 Encrypted</span></span>
-    <button class="refresh-btn" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button></div>
-    <div class="filter-bar"><input type="text" id="searchInput" class="search-input" placeholder="🔍 Search..." oninput="filterResults()">
-    <button class="refresh-btn" onclick="loadResults()"><i class="fas fa-sync-alt"></i> Refresh</button>
-    <span class="autorefresh-info"><i class="fas fa-clock"></i> Auto: 3s</span></div>
-    <div class="accounts-grid" id="accountsGrid"><div class="no-results"><i class="fas fa-spinner fa-pulse"></i><div>Loading...</div></div></div></div>
-    <div class="footer"><i class="fas fa-chart-line"></i> <span id="footerCount">0</span> accounts | <i class="fas fa-lock"></i> Passwords hidden</div>
-</div></div>
-<script>
-let liveResults=[], authToken=null, refreshInterval=null;
-async function verifyPin(){let p=document.getElementById('pinInput').value;if(!p){document.getElementById('pinError').innerText='Enter PIN';return;}try{let r=await fetch('/live/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:p})});let d=await r.json();if(d.success){authToken=d.token;localStorage.setItem('live_admin_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},3000);}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
-async function loadResults(){try{let r=await fetch('/results/public');if(r.ok){liveResults=await r.json();renderResults();updateStats();document.getElementById('lastUpdate').innerHTML='🕐 '+new Date().toLocaleTimeString();}else{document.getElementById('accountsGrid').innerHTML='<div class="no-results"><i class="fas fa-exclamation-triangle" style="color:#f85149;"></i><div style="color:#f85149;">Error loading</div></div>';}}catch(e){}}
-async function updateOnline(){try{let r=await fetch('/api/online');let d=await r.json();document.getElementById('onlineUsers').innerHTML='👤 '+d.online;}catch(e){}}
-function renderResults(){let g=document.getElementById('accountsGrid'), s=document.getElementById('searchInput').value.toLowerCase();let f=liveResults;if(s)f=f.filter(r=>r.username.toLowerCase().includes(s));f.sort((a,b)=>(parseFloat(b.balance_value)||0)-(parseFloat(a.balance_value)||0));if(!f.length){g.innerHTML='<div class="no-results"><i class="fas fa-inbox"></i><div>No results</div></div>';return;}let bc=v=>{let n=parseFloat(v)||0;return n>100?'balance-positive':n>10?'balance-medium':'balance-zero';};g.innerHTML=f.map(a=>`<div class="account-card"><div class="card-header"><span class="username"><i class="fas fa-user-circle" style="margin-right:6px;color:#58a6ff;"></i>${esc(a.username)}</span><span class="status-badge">${a.status}</span></div><div class="card-body"><div class="balance-label"><i class="fas fa-coins"></i> Balance</div><div class="balance ${bc(a.balance_value)}">${a.balance||'0 ֏'}</div><div style="margin-top:8px;"><button class="copy-btn" onclick="copyToClipboard('${esc(a.username)}')"><i class="fas fa-copy"></i> Copy</button></div></div></div>`).join('');}
-function updateStats(){let t=liveResults.length,s=liveResults.filter(r=>r.status==='✅').length,f=liveResults.filter(r=>r.status==='❌').length,to=liveResults.filter(r=>r.status==='⏰').length,tb=liveResults.reduce((sum,r)=>sum+(parseFloat(r.balance_value)||0),0);document.getElementById('totalAccounts').textContent=t;document.getElementById('successAccounts').textContent=s;document.getElementById('failedAccounts').textContent=f;document.getElementById('timeoutAccounts').textContent=to;document.getElementById('totalBalance').textContent=tb.toFixed(2)+' ֏';document.getElementById('footerCount').textContent=t;}
-function filterResults(){renderResults();}
-function manualRefresh(){loadResults();updateOnline();}
-function copyToClipboard(t){navigator.clipboard.writeText(t);}
-function esc(s){if(!s)return'';return String(s).replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]);}
-(async()=>{let t=localStorage.getItem('live_admin_token');if(t){try{let r=await fetch(`/live/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},3000);}}catch(e){}}})();
-document.addEventListener('contextmenu',e=>e.preventDefault());
-document.addEventListener('keydown',e=>{if(e.key==='F12'||(e.ctrlKey&&e.shiftKey&&['i','I','j','J'].includes(e.key))||(e.ctrlKey&&['u','U'].includes(e.key))){e.preventDefault();}});
-console.log('%c🔒 Live Admin - Protected','font-size:18px;color:#3fb950;');
-</script>
-</body>
-</html>'''
-
-# ===== MAIN HTML =====
+# ===== MAIN HTML (with fixed JavaScript) =====
 MAIN_HTML = '''<!DOCTYPE html>
 <html lang="hy">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Master UI v3.4</title>
+    <title>Master UI v3.5</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -697,7 +598,7 @@ MAIN_HTML = '''<!DOCTYPE html>
 <button onclick="verifyPin()"><i class="fas fa-unlock-alt"></i> Access</button>
 <div id="pinError" class="pin-error"></div></div></div>
 <div id="mainContent" class="main-content"><div class="container">
-<div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI v3.4 <span class="online-badge" id="onlineUsers">👤 0</span></h1>
+<div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI v3.5 <span class="online-badge" id="onlineUsers">👤 0</span></h1>
 <div class="header-sub">🔐 Encrypted | ⭐ Pinned on top <a href="/live_administrator" target="_blank" class="live-admin-link"><i class="fas fa-eye"></i> Live Admin</a></div></div>
 <div class="stats-top"><div class="stat-card" onclick="setFilter('all')"><div class="stat-number" id="totalCount">0</div><div class="stat-label">TOTAL</div></div>
 <div class="stat-card" onclick="setFilter('success')"><div class="stat-number" id="successCount">0</div><div class="stat-label">✅ SUCCESS</div></div>
@@ -708,7 +609,7 @@ MAIN_HTML = '''<!DOCTYPE html>
 <div class="filter-bar"><input type="text" id="searchInput" class="search-input" placeholder="🔍 Search..."><button class="filter-btn active" data-filter="all" onclick="setFilter('all')">All</button><button class="filter-btn" data-filter="success" onclick="setFilter('success')">✅</button><button class="filter-btn" data-filter="failed" onclick="setFilter('failed')">❌</button><button class="filter-btn" data-filter="timeout" onclick="setFilter('timeout')">⏰</button><button class="refresh-btn" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button><div class="balance-filter"><span>💰</span><button class="balance-filter-btn active" data-balance="all" onclick="setBalanceFilter('all')">All</button><button class="balance-filter-btn" data-balance="low" onclick="setBalanceFilter('low')">&lt;10</button><button class="balance-filter-btn" data-balance="mid" onclick="setBalanceFilter('mid')">10-100</button><button class="balance-filter-btn" data-balance="high" onclick="setBalanceFilter('high')">100+</button></div></div>
 <div class="table-container"><table><thead><tr><th>⭐</th><th onclick="sortBy('status')">Status</th><th onclick="sortBy('username')">Username</th><th onclick="sortBy('password')">Password</th><th onclick="sortBy('balance')">Balance</th><th>Action</th></tr></thead><tbody id="resultsBody"><tr><td colspan="6" style="text-align:center;padding:40px;"><i class="fas fa-spinner fa-pulse"></i> Loading...</td></tr></tbody></table></div></div>
 <div class="bottom-grid"><div class="card"><div class="card-header"><i class="fas fa-server"></i> Bot Servers</div><div class="servers-list"><div id="serversContainer"></div><div style="display:flex;gap:8px;margin-top:10px;"><input type="text" id="newServerInput" class="search-input" placeholder="http://..." style="flex:1;"><button class="add-server-btn" onclick="addServer()"><i class="fas fa-plus"></i> Add</button></div><button class="btn btn-primary" onclick="saveServers()" style="margin-top:10px;width:100%;"><i class="fas fa-save"></i> Save & Apply</button></div><div class="button-group"><button class="btn btn-secondary" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button><button class="btn btn-danger" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear</button><button class="btn btn-secondary" onclick="clearTerminal()"><i class="fas fa-trash"></i> Clear Terminal</button></div></div>
-<div class="card"><div class="terminal-header"><h3 style="font-size:13px;"><i class="fas fa-terminal"></i> Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 Master UI v3.4 Final Perfect</div><div class="terminal-line"><span class="time">●</span> ⚡ Fast caching | 🔐 Encrypted</div></div></div></div></div>
+<div class="card"><div class="terminal-header"><h3 style="font-size:13px;"><i class="fas fa-terminal"></i> Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 Master UI v3.5 Fixed</div><div class="terminal-line"><span class="time">●</span> 📊 Progress: processed/total</div></div></div></div></div>
 <div class="auto-refresh"><i class="fas fa-clock"></i> Auto: 3s | 👤 <span id="onlineUsersSmall">0</span></div></div>
 <script>
 let allResults=[], currentFilter='all', currentBalanceFilter='all', currentSort={field:'balance',dir:'desc'};
@@ -726,16 +627,61 @@ function initializeApp(){loadServers();loadResults();updateServerStatuses();upda
 
 async function updateOnline(){try{let r=await fetch(`/api/online?token=${authToken}`);let d=await r.json();let c=Math.min(d.online,2);document.getElementById('onlineUsers').innerHTML='👤 '+c;document.getElementById('onlineUsersSmall').innerHTML=c;}catch(e){}}
 
-async function updateServerStatuses(){try{let r=await fetch(`/health?token=${authToken}`);if(r.ok){let d=await r.json();for(let b of d.bots){serverStatuses[b.server]={status:b.status,running:b.running||false,current_index:b.current_index||0,total:b.total||0};}renderServersList();}}catch(e){}}
+async function updateServerStatuses(){
+    try{
+        let r=await fetch(`/health?token=${authToken}`);
+        if(r.ok){
+            let d=await r.json();
+            for(let b of d.bots){
+                serverStatuses[b.server] = {
+                    status: b.status,
+                    running: b.running || false,
+                    processed: b.processed || 0,
+                    total: b.total || 0
+                };
+            }
+            renderServersList();
+        }
+    } catch(e) {}
+}
 
 async function loadServers(){try{let r=await fetch(`/api/servers?token=${authToken}`);if(r.ok){let d=await r.json();currentServers=d.servers;renderServersList();}}catch(e){}}
 
-function renderServersList(){let c=document.getElementById('serversContainer');if(!c)return;if(!currentServers.length){c.innerHTML='<div style="color:#8b949e;text-align:center;padding:20px;">No servers.</div>';return;}c.innerHTML=currentServers.map((s,i)=>{let info=serverStatuses[s]||{status:'checking',running:false,current_index:0,total:0};let ledClass='',statusText='';if(info.status==='offline'){ledClass='offline';statusText='Offline';}else if(info.status==='online'&&info.running){ledClass='running';statusText='Running';}else if(info.status==='online'&&!info.running){ledClass='online';statusText='Online';}else{ledClass='checking';statusText='Checking...';}
-let progressText='';
-if(info.status==='online'&&info.total>0){
-    progressText=`<span style="font-size:10px;color:#58a6ff;margin-left:6px;">📊 ${info.current_index}/${info.total}</span>`;
+function renderServersList(){
+    let c=document.getElementById('serversContainer');
+    if(!c)return;
+    if(!currentServers.length){
+        c.innerHTML='<div style="color:#8b949e;text-align:center;padding:20px;">No servers.</div>';
+        return;
+    }
+    c.innerHTML=currentServers.map((s,i)=>{
+        let info=serverStatuses[s]||{status:'checking',running:false,processed:0,total:0};
+        let ledClass='',statusText='';
+        if(info.status==='offline'){ledClass='offline';statusText='Offline';}
+        else if(info.status==='online'&&info.running){ledClass='running';statusText='Running';}
+        else if(info.status==='online'&&!info.running){ledClass='online';statusText='Online';}
+        else{ledClass='checking';statusText='Checking...';}
+        
+        let progressText='';
+        if(info.status==='online'&&info.total>0){
+            progressText=`<span style="font-size:10px;color:#58a6ff;margin-left:6px;">📊 ${info.processed}/${info.total}</span>`;
+        }
+        return`<div class="server-item">
+            <input type="text" id="server_${i}" value="${esc(s)}">
+            <div class="server-status">
+                <span class="status-led ${ledClass}"></span>
+                <span style="font-size:10px;">${statusText}</span>
+                ${progressText}
+            </div>
+            <div class="server-controls">
+                <button class="control-btn control-start" onclick="startServer(${i})" ${info.status!=='online'?'disabled':''}>Start</button>
+                <button class="control-btn control-restart" onclick="restartServer(${i})" ${info.status!=='online'?'disabled':''}>Restart</button>
+                <button class="control-btn control-stop" onclick="stopServer(${i})" ${info.status!=='online'?'disabled':''}>Stop</button>
+                <button class="remove-server-btn" onclick="removeServer(${i})"><i class="fas fa-trash"></i></button>
+            </div>
+        </div>`;
+    }).join('');
 }
-return`<div class="server-item"><input type="text" id="server_${i}" value="${esc(s)}"><div class="server-status"><span class="status-led ${ledClass}"></span><span style="font-size:10px;">${statusText}</span>${progressText}</div><div class="server-controls"><button class="control-btn control-start" onclick="startServer(${i})" ${info.status!=='online'?'disabled':''}>Start</button><button class="control-btn control-restart" onclick="restartServer(${i})" ${info.status!=='online'?'disabled':''}>Restart</button><button class="control-btn control-stop" onclick="stopServer(${i})" ${info.status!=='online'?'disabled':''}>Stop</button><button class="remove-server-btn" onclick="removeServer(${i})"><i class="fas fa-trash"></i></button></div></div>`;}).join('');}
 
 async function startServer(i){let s=currentServers[i];if(!s)return;let a=prompt(`Accounts for ${s}\n\nFormat: username:password (one per line):`,'');if(!a)return;addLog(`Starting ${s}...`);try{let r=await fetch(`/api/control/${i}/start?token=${authToken}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accounts:a})});let d=await r.json();addLog(d.success?`Started ${s}`:`Failed: ${d.error}`);if(d.success)setTimeout(()=>updateServerStatuses(),1000);}catch(e){addLog(`Error: ${e.message}`);}}
 
@@ -773,7 +719,106 @@ document.addEventListener('keypress',function(e){if(e.target&&e.target.id==='pin
 (async()=>{let t=localStorage.getItem('master_token');if(t){try{let r=await fetch(`/api/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';initializeApp();}}catch(e){}}})();
 document.addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('keydown',e=>{if(e.key==='F12'||(e.ctrlKey&&e.shiftKey&&['i','I','j','J'].includes(e.key))||(e.ctrlKey&&['u','U'].includes(e.key))){e.preventDefault();}});
-console.log('%c⚡ Master UI v3.4 - Final Perfect','font-size:18px;color:#3fb950;');
+console.log('%c⚡ Master UI v3.5 - Progress Fixed','font-size:18px;color:#3fb950;');
+</script>
+</body>
+</html>'''
+
+# ===== LIVE ADMIN HTML =====
+LIVE_ADMIN_HTML = '''<!DOCTYPE html>
+<html lang="hy">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Live Admin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{background:#0a0c10;color:#e6edf3;font-family:'Inter',sans-serif;min-height:100vh}
+        .pin-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.95);backdrop-filter:blur(12px);display:flex;align-items:center;justify-content:center;z-index:1000}
+        .pin-box{background:#161b22;border:1px solid #30363d;border-radius:24px;padding:40px;width:320px;text-align:center}
+        .pin-box h2{margin-bottom:24px;background:linear-gradient(135deg,#58a6ff,#3fb950);-webkit-background-clip:text;background-clip:text;color:transparent}
+        .pin-box input{width:100%;padding:12px;background:#0d1117;border:1px solid #30363d;border-radius:12px;color:#fff;font-size:18px;text-align:center;letter-spacing:6px}
+        .pin-box button{width:100%;padding:12px;background:linear-gradient(135deg,#238636,#2ea043);border:none;border-radius:12px;color:#fff;font-weight:bold;cursor:pointer;margin-top:16px}
+        .pin-error{color:#f85149;font-size:12px;margin-top:12px}
+        .main-content{display:none}
+        .container{max-width:1600px;margin:0 auto;padding:20px}
+        .header{background:linear-gradient(135deg,rgba(22,27,34,0.95),rgba(13,17,23,0.95));border-radius:20px;padding:14px 24px;margin-bottom:20px;border:1px solid rgba(48,54,61,0.5);text-align:center}
+        .header h1{font-size:24px;font-weight:700;background:linear-gradient(135deg,#58a6ff,#3fb950,#f0883e);-webkit-background-clip:text;background-clip:text;color:transparent}
+        .header-sub{font-size:12px;color:#8b949e;margin-top:4px}
+        .online-badge{background:transparent;padding:2px 12px;border-radius:20px;font-size:12px;color:#58a6ff;border:1px solid #30363d}
+        .stats-top{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
+        .stat-card{background:#161b22;border-radius:14px;padding:10px 12px;text-align:center;border:1px solid #30363d;transition:all 0.2s}
+        .stat-card:hover{border-color:#58a6ff;background:#1a1f2e}
+        .stat-number{font-size:22px;font-weight:700;color:#58a6ff}
+        .stat-number.balance-total{color:#f0883e}
+        .stat-label{font-size:10px;color:#8b949e;margin-top:3px}
+        .results-section{background:#161b22;border-radius:20px;border:1px solid #30363d;overflow:hidden;margin-bottom:20px}
+        .section-header{padding:14px 20px;background:#0d1117;border-bottom:1px solid #30363d;font-weight:600;font-size:15px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+        .filter-bar{padding:12px 20px;background:#0d1117;border-bottom:1px solid #21262d;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+        .search-input{padding:6px 14px;background:#010409;border:1px solid #30363d;border-radius:30px;color:#fff;width:220px;font-size:12px}
+        .refresh-btn{padding:5px 14px;background:#1f6feb;border:none;border-radius:30px;color:#fff;cursor:pointer;font-size:11px}
+        .refresh-btn:hover{background:#388bfd}
+        .accounts-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+        .account-card{background:#161b22;border-radius:16px;border:1px solid #30363d;overflow:hidden;transition:all 0.2s}
+        .account-card:hover{border-color:#58a6ff;transform:translateY(-2px)}
+        .account-card .card-header{padding:12px 16px;background:#0d1117;border-bottom:1px solid #21262d;display:flex;justify-content:space-between;align-items:center}
+        .account-card .username{font-size:15px;font-weight:600;color:#58a6ff;word-break:break-all}
+        .account-card .status-badge{font-size:18px}
+        .account-card .card-body{padding:12px 16px}
+        .account-card .balance{font-size:28px;font-weight:700}
+        .balance-positive{color:#3fb950}
+        .balance-medium{color:#d29922}
+        .balance-zero{color:#f85149}
+        .balance-label{font-size:10px;color:#8b949e;margin-bottom:2px}
+        .copy-btn{background:transparent;border:1px solid #30363d;border-radius:16px;padding:2px 8px;color:#58a6ff;cursor:pointer;font-size:10px}
+        .copy-btn:hover{background:#30363d}
+        .footer{text-align:center;padding:16px;font-size:10px;color:#6e7681;border-top:1px solid #21262d;margin-top:20px}
+        .no-results{text-align:center;padding:60px 20px;color:#6e7681;grid-column:1/-1}
+        .no-results i{font-size:40px;margin-bottom:16px;color:#30363d}
+        .autorefresh-info{font-size:11px;color:#6e7681}
+        @media(max-width:900px){.stats-top{grid-template-columns:repeat(3,1fr)}.accounts-grid{grid-template-columns:1fr}.filter-bar{flex-direction:column;align-items:stretch}.search-input{width:100%}}
+    </style>
+</head>
+<body>
+<div id="pinOverlay" class="pin-overlay">
+    <div class="pin-box"><h2><i class="fas fa-eye"></i> Live Admin</h2>
+    <input type="password" id="pinInput" placeholder="PIN" maxlength="6" autofocus>
+    <button onclick="verifyPin()"><i class="fas fa-unlock-alt"></i> Access</button>
+    <div id="pinError" class="pin-error"></div></div>
+</div>
+<div id="mainContent" class="main-content"><div class="container">
+    <div class="header"><h1><i class="fas fa-eye"></i> Live Administrator <span class="online-badge" id="onlineUsers">👤 0</span></h1>
+    <div class="header-sub"><i class="fas fa-lock"></i> Encrypted | <span id="lastUpdate">Loading...</span> | <i class="fas fa-user-secret"></i> Passwords hidden</div></div>
+    <div class="stats-top"><div class="stat-card"><div class="stat-number" id="totalAccounts">0</div><div class="stat-label">📊 Total</div></div>
+    <div class="stat-card"><div class="stat-number" id="successAccounts">0</div><div class="stat-label">✅ Success</div></div>
+    <div class="stat-card"><div class="stat-number" id="failedAccounts">0</div><div class="stat-label">❌ Failed</div></div>
+    <div class="stat-card"><div class="stat-number" id="timeoutAccounts">0</div><div class="stat-label">⏰ Timeout</div></div>
+    <div class="stat-card"><div class="stat-number balance-total" id="totalBalance">0</div><div class="stat-label">💰 Total Balance</div></div></div>
+    <div class="results-section"><div class="section-header"><span><i class="fas fa-chart-line"></i> Live Results <span style="font-size:10px;color:#3fb950;">🔐 Encrypted</span></span>
+    <button class="refresh-btn" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button></div>
+    <div class="filter-bar"><input type="text" id="searchInput" class="search-input" placeholder="🔍 Search..." oninput="filterResults()">
+    <button class="refresh-btn" onclick="loadResults()"><i class="fas fa-sync-alt"></i> Refresh</button>
+    <span class="autorefresh-info"><i class="fas fa-clock"></i> Auto: 3s</span></div>
+    <div class="accounts-grid" id="accountsGrid"><div class="no-results"><i class="fas fa-spinner fa-pulse"></i><div>Loading...</div></div></div></div>
+    <div class="footer"><i class="fas fa-chart-line"></i> <span id="footerCount">0</span> accounts | <i class="fas fa-lock"></i> Passwords hidden</div>
+</div></div>
+<script>
+let liveResults=[], authToken=null, refreshInterval=null;
+async function verifyPin(){let p=document.getElementById('pinInput').value;if(!p){document.getElementById('pinError').innerText='Enter PIN';return;}try{let r=await fetch('/live/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:p})});let d=await r.json();if(d.success){authToken=d.token;localStorage.setItem('live_admin_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},3000);}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
+async function loadResults(){try{let r=await fetch('/results/public');if(r.ok){liveResults=await r.json();renderResults();updateStats();document.getElementById('lastUpdate').innerHTML='🕐 '+new Date().toLocaleTimeString();}else{document.getElementById('accountsGrid').innerHTML='<div class="no-results"><i class="fas fa-exclamation-triangle" style="color:#f85149;"></i><div style="color:#f85149;">Error loading</div></div>';}}catch(e){}}
+async function updateOnline(){try{let r=await fetch('/api/online');let d=await r.json();document.getElementById('onlineUsers').innerHTML='👤 '+d.online;}catch(e){}}
+function renderResults(){let g=document.getElementById('accountsGrid'), s=document.getElementById('searchInput').value.toLowerCase();let f=liveResults;if(s)f=f.filter(r=>r.username.toLowerCase().includes(s));f.sort((a,b)=>(parseFloat(b.balance_value)||0)-(parseFloat(a.balance_value)||0));if(!f.length){g.innerHTML='<div class="no-results"><i class="fas fa-inbox"></i><div>No results</div></div>';return;}let bc=v=>{let n=parseFloat(v)||0;return n>100?'balance-positive':n>10?'balance-medium':'balance-zero';};g.innerHTML=f.map(a=>`<div class="account-card"><div class="card-header"><span class="username"><i class="fas fa-user-circle" style="margin-right:6px;color:#58a6ff;"></i>${esc(a.username)}</span><span class="status-badge">${a.status}</span></div><div class="card-body"><div class="balance-label"><i class="fas fa-coins"></i> Balance</div><div class="balance ${bc(a.balance_value)}">${a.balance||'0 ֏'}</div><div style="margin-top:8px;"><button class="copy-btn" onclick="copyToClipboard('${esc(a.username)}')"><i class="fas fa-copy"></i> Copy</button></div></div></div>`).join('');}
+function updateStats(){let t=liveResults.length,s=liveResults.filter(r=>r.status==='✅').length,f=liveResults.filter(r=>r.status==='❌').length,to=liveResults.filter(r=>r.status==='⏰').length,tb=liveResults.reduce((sum,r)=>sum+(parseFloat(r.balance_value)||0),0);document.getElementById('totalAccounts').textContent=t;document.getElementById('successAccounts').textContent=s;document.getElementById('failedAccounts').textContent=f;document.getElementById('timeoutAccounts').textContent=to;document.getElementById('totalBalance').textContent=tb.toFixed(2)+' ֏';document.getElementById('footerCount').textContent=t;}
+function filterResults(){renderResults();}
+function manualRefresh(){loadResults();updateOnline();}
+function copyToClipboard(t){navigator.clipboard.writeText(t);}
+function esc(s){if(!s)return'';return String(s).replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]);}
+(async()=>{let t=localStorage.getItem('live_admin_token');if(t){try{let r=await fetch(`/live/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},3000);}}catch(e){}}})();
+document.addEventListener('contextmenu',e=>e.preventDefault());
+document.addEventListener('keydown',e=>{if(e.key==='F12'||(e.ctrlKey&&e.shiftKey&&['i','I','j','J'].includes(e.key))||(e.ctrlKey&&['u','U'].includes(e.key))){e.preventDefault();}});
+console.log('%c🔒 Live Admin - Protected','font-size:18px;color:#3fb950;');
 </script>
 </body>
 </html>'''
@@ -843,7 +888,7 @@ function esc(s){if(!s)return'';return s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&
 (async()=>{let t=localStorage.getItem('mobile_token');if(t){try{let r=await fetch(`/mobile/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mobileDashboard').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},3000);}}catch(e){}}})();
 document.addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('keydown',e=>{if(e.key==='F12'||(e.ctrlKey&&e.shiftKey&&['i','I','j','J'].includes(e.key))||(e.ctrlKey&&['u','U'].includes(e.key))){e.preventDefault();}});
-console.log('%c📱 Mobile Monitor v3.4','font-size:18px;color:#3fb950;');
+console.log('%c📱 Mobile Monitor v3.5','font-size:18px;color:#3fb950;');
 </script>
 </body>
 </html>'''
@@ -871,7 +916,7 @@ if __name__ == "__main__":
     import time
     
     print("\n" + "=" * 60)
-    print("⚡ MASTER UI v3.4 - FINAL PERFECT")
+    print("⚡ MASTER UI v3.5 - PROGRESS FIXED")
     print("=" * 60)
     print(f"📍 Master UI:     http://localhost:9000/homepages.admin.dashboard")
     print(f"📍 Mobile:        http://localhost:9000/mobile.dashboard.administration")
@@ -882,6 +927,7 @@ if __name__ == "__main__":
     print(f"🔐 Live PIN:      {LIVE_ADMIN_PIN}")
     print(f"👤 Online Users:  MAX 2")
     print(f"⚡ Cache TTL:     3 seconds")
+    print(f"📊 Progress:      processed/total")
     print("=" * 60 + "\n")
     
     uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
