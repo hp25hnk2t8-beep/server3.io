@@ -1,4 +1,4 @@
-# ================= MASTER UI V3.3 - OPTIMIZED =================
+# ================= MASTER UI V3.4 - FINAL PERFECT =================
 import os
 import httpx
 import asyncio
@@ -95,9 +95,7 @@ def update_user_activity(token: str):
     if token:
         online_users[token] = datetime.now()
         last_activity[token] = datetime.now()
-    # Limit to MAX_ONLINE_USERS
     if len(online_users) > MAX_ONLINE_USERS:
-        # Remove oldest users
         sorted_users = sorted(online_users.items(), key=lambda x: x[1])
         for token, _ in sorted_users[:len(online_users) - MAX_ONLINE_USERS]:
             if token in online_users:
@@ -206,33 +204,29 @@ def save_cached_results(results: Dict[str, Dict]):
 
 BOT_SERVERS = load_servers()
 
-app = FastAPI(title="Master UI - Optimized")
+app = FastAPI(title="Master UI - Final Perfect")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # ================= CACHE =================
 cached_results: Dict[str, Dict] = load_cached_results()
 last_fetch_time = 0
 fetch_lock = asyncio.Lock()
-CACHE_TTL = 3  # 3 seconds cache
+CACHE_TTL = 3
 
 async def fetch_and_merge_results(use_encrypted: bool = True) -> List[Dict]:
-    """Fetch results from all bots with caching"""
     global cached_results, last_fetch_time
     
     async with fetch_lock:
-        # Return cached if fresh
         now = time.time()
         if now - last_fetch_time < CACHE_TTL and cached_results:
             return list(cached_results.values())
         
-        # Create a client with connection pooling
         limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
         async with httpx.AsyncClient(timeout=10, limits=limits) as client:
             tasks = []
             for server in BOT_SERVERS:
                 tasks.append(fetch_from_server(client, server, use_encrypted))
             
-            # Run all requests concurrently
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             for result in results:
@@ -264,9 +258,7 @@ async def fetch_and_merge_results(use_encrypted: bool = True) -> List[Dict]:
         return list(cached_results.values())
 
 async def fetch_from_server(client, server: str, use_encrypted: bool) -> Optional[List[Dict]]:
-    """Fetch from a single server"""
     try:
-        # Try encrypted endpoint first
         if use_encrypted:
             try:
                 auth = httpx.BasicAuth(BOT_AUTH_USERNAME, BOT_AUTH_PASSWORD)
@@ -285,7 +277,6 @@ async def fetch_from_server(client, server: str, use_encrypted: bool) -> Optiona
             except:
                 pass
         
-        # Fallback to regular results
         res = await client.get(f"{server}/results", timeout=8)
         if res.status_code == 200:
             return res.json()
@@ -301,7 +292,6 @@ async def get_merged_results(token: str = Depends(get_any_user)):
 
 @app.get("/results/public")
 async def get_public_results():
-    """Public endpoint - no auth, returns only username and balance"""
     results = await fetch_and_merge_results(use_encrypted=True)
     filtered = []
     for account in results:
@@ -596,13 +586,13 @@ console.log('%c🔒 Live Admin - Protected','font-size:18px;color:#3fb950;');
 </body>
 </html>'''
 
-# ===== MAIN HTML (same as before, but with optimized JS) =====
+# ===== MAIN HTML =====
 MAIN_HTML = '''<!DOCTYPE html>
 <html lang="hy">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Master UI</title>
+    <title>Master UI v3.4</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -707,7 +697,7 @@ MAIN_HTML = '''<!DOCTYPE html>
 <button onclick="verifyPin()"><i class="fas fa-unlock-alt"></i> Access</button>
 <div id="pinError" class="pin-error"></div></div></div>
 <div id="mainContent" class="main-content"><div class="container">
-<div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI <span class="online-badge" id="onlineUsers">👤 0</span></h1>
+<div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI v3.4 <span class="online-badge" id="onlineUsers">👤 0</span></h1>
 <div class="header-sub">🔐 Encrypted | ⭐ Pinned on top <a href="/live_administrator" target="_blank" class="live-admin-link"><i class="fas fa-eye"></i> Live Admin</a></div></div>
 <div class="stats-top"><div class="stat-card" onclick="setFilter('all')"><div class="stat-number" id="totalCount">0</div><div class="stat-label">TOTAL</div></div>
 <div class="stat-card" onclick="setFilter('success')"><div class="stat-number" id="successCount">0</div><div class="stat-label">✅ SUCCESS</div></div>
@@ -718,7 +708,7 @@ MAIN_HTML = '''<!DOCTYPE html>
 <div class="filter-bar"><input type="text" id="searchInput" class="search-input" placeholder="🔍 Search..."><button class="filter-btn active" data-filter="all" onclick="setFilter('all')">All</button><button class="filter-btn" data-filter="success" onclick="setFilter('success')">✅</button><button class="filter-btn" data-filter="failed" onclick="setFilter('failed')">❌</button><button class="filter-btn" data-filter="timeout" onclick="setFilter('timeout')">⏰</button><button class="refresh-btn" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button><div class="balance-filter"><span>💰</span><button class="balance-filter-btn active" data-balance="all" onclick="setBalanceFilter('all')">All</button><button class="balance-filter-btn" data-balance="low" onclick="setBalanceFilter('low')">&lt;10</button><button class="balance-filter-btn" data-balance="mid" onclick="setBalanceFilter('mid')">10-100</button><button class="balance-filter-btn" data-balance="high" onclick="setBalanceFilter('high')">100+</button></div></div>
 <div class="table-container"><table><thead><tr><th>⭐</th><th onclick="sortBy('status')">Status</th><th onclick="sortBy('username')">Username</th><th onclick="sortBy('password')">Password</th><th onclick="sortBy('balance')">Balance</th><th>Action</th></tr></thead><tbody id="resultsBody"><tr><td colspan="6" style="text-align:center;padding:40px;"><i class="fas fa-spinner fa-pulse"></i> Loading...</td></tr></tbody></table></div></div>
 <div class="bottom-grid"><div class="card"><div class="card-header"><i class="fas fa-server"></i> Bot Servers</div><div class="servers-list"><div id="serversContainer"></div><div style="display:flex;gap:8px;margin-top:10px;"><input type="text" id="newServerInput" class="search-input" placeholder="http://..." style="flex:1;"><button class="add-server-btn" onclick="addServer()"><i class="fas fa-plus"></i> Add</button></div><button class="btn btn-primary" onclick="saveServers()" style="margin-top:10px;width:100%;"><i class="fas fa-save"></i> Save & Apply</button></div><div class="button-group"><button class="btn btn-secondary" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button><button class="btn btn-danger" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear</button><button class="btn btn-secondary" onclick="clearTerminal()"><i class="fas fa-trash"></i> Clear Terminal</button></div></div>
-<div class="card"><div class="terminal-header"><h3 style="font-size:13px;"><i class="fas fa-terminal"></i> Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 Master UI v3.3 Optimized</div><div class="terminal-line"><span class="time">●</span> ⚡ Fast caching | 🔐 Encrypted</div></div></div></div></div>
+<div class="card"><div class="terminal-header"><h3 style="font-size:13px;"><i class="fas fa-terminal"></i> Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 Master UI v3.4 Final Perfect</div><div class="terminal-line"><span class="time">●</span> ⚡ Fast caching | 🔐 Encrypted</div></div></div></div></div>
 <div class="auto-refresh"><i class="fas fa-clock"></i> Auto: 3s | 👤 <span id="onlineUsersSmall">0</span></div></div>
 <script>
 let allResults=[], currentFilter='all', currentBalanceFilter='all', currentSort={field:'balance',dir:'desc'};
@@ -736,11 +726,16 @@ function initializeApp(){loadServers();loadResults();updateServerStatuses();upda
 
 async function updateOnline(){try{let r=await fetch(`/api/online?token=${authToken}`);let d=await r.json();let c=Math.min(d.online,2);document.getElementById('onlineUsers').innerHTML='👤 '+c;document.getElementById('onlineUsersSmall').innerHTML=c;}catch(e){}}
 
-async function updateServerStatuses(){try{let r=await fetch(`/health?token=${authToken}`);if(r.ok){let d=await r.json();for(let b of d.bots)serverStatuses[b.server]={status:b.status,running:b.running||false,current_index:b.current_index||0,total:b.total||0};renderServersList();}}catch(e){}}
+async function updateServerStatuses(){try{let r=await fetch(`/health?token=${authToken}`);if(r.ok){let d=await r.json();for(let b of d.bots){serverStatuses[b.server]={status:b.status,running:b.running||false,current_index:b.current_index||0,total:b.total||0};}renderServersList();}}catch(e){}}
 
 async function loadServers(){try{let r=await fetch(`/api/servers?token=${authToken}`);if(r.ok){let d=await r.json();currentServers=d.servers;renderServersList();}}catch(e){}}
 
-function renderServersList(){let c=document.getElementById('serversContainer');if(!c)return;if(!currentServers.length){c.innerHTML='<div style="color:#8b949e;text-align:center;padding:20px;">No servers.</div>';return;}c.innerHTML=currentServers.map((s,i)=>{let info=serverStatuses[s]||{status:'checking',running:false,current_index:0,total:0};let ledClass='',statusText='';if(info.status==='offline'){ledClass='offline';statusText='Offline';}else if(info.status==='online'&&info.running){ledClass='running';statusText='Running';}else if(info.status==='online'&&!info.running){ledClass='online';statusText='Online';}else{ledClass='checking';statusText='Checking...';}let prog=(info.running&&info.status==='online')?`<span style="font-size:10px;color:#8b949e;">📊 ${info.current_index}/${info.total}</span>`:'';return`<div class="server-item"><input type="text" id="server_${i}" value="${esc(s)}"><div class="server-status"><span class="status-led ${ledClass}"></span><span style="font-size:10px;">${statusText}</span>${prog}</div><div class="server-controls"><button class="control-btn control-start" onclick="startServer(${i})" ${info.status!=='online'?'disabled':''}>Start</button><button class="control-btn control-restart" onclick="restartServer(${i})" ${info.status!=='online'?'disabled':''}>Restart</button><button class="control-btn control-stop" onclick="stopServer(${i})" ${info.status!=='online'?'disabled':''}>Stop</button><button class="remove-server-btn" onclick="removeServer(${i})"><i class="fas fa-trash"></i></button></div></div>`;}).join('');}
+function renderServersList(){let c=document.getElementById('serversContainer');if(!c)return;if(!currentServers.length){c.innerHTML='<div style="color:#8b949e;text-align:center;padding:20px;">No servers.</div>';return;}c.innerHTML=currentServers.map((s,i)=>{let info=serverStatuses[s]||{status:'checking',running:false,current_index:0,total:0};let ledClass='',statusText='';if(info.status==='offline'){ledClass='offline';statusText='Offline';}else if(info.status==='online'&&info.running){ledClass='running';statusText='Running';}else if(info.status==='online'&&!info.running){ledClass='online';statusText='Online';}else{ledClass='checking';statusText='Checking...';}
+let progressText='';
+if(info.status==='online'&&info.total>0){
+    progressText=`<span style="font-size:10px;color:#58a6ff;margin-left:6px;">📊 ${info.current_index}/${info.total}</span>`;
+}
+return`<div class="server-item"><input type="text" id="server_${i}" value="${esc(s)}"><div class="server-status"><span class="status-led ${ledClass}"></span><span style="font-size:10px;">${statusText}</span>${progressText}</div><div class="server-controls"><button class="control-btn control-start" onclick="startServer(${i})" ${info.status!=='online'?'disabled':''}>Start</button><button class="control-btn control-restart" onclick="restartServer(${i})" ${info.status!=='online'?'disabled':''}>Restart</button><button class="control-btn control-stop" onclick="stopServer(${i})" ${info.status!=='online'?'disabled':''}>Stop</button><button class="remove-server-btn" onclick="removeServer(${i})"><i class="fas fa-trash"></i></button></div></div>`;}).join('');}
 
 async function startServer(i){let s=currentServers[i];if(!s)return;let a=prompt(`Accounts for ${s}\n\nFormat: username:password (one per line):`,'');if(!a)return;addLog(`Starting ${s}...`);try{let r=await fetch(`/api/control/${i}/start?token=${authToken}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accounts:a})});let d=await r.json();addLog(d.success?`Started ${s}`:`Failed: ${d.error}`);if(d.success)setTimeout(()=>updateServerStatuses(),1000);}catch(e){addLog(`Error: ${e.message}`);}}
 
@@ -778,7 +773,7 @@ document.addEventListener('keypress',function(e){if(e.target&&e.target.id==='pin
 (async()=>{let t=localStorage.getItem('master_token');if(t){try{let r=await fetch(`/api/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';initializeApp();}}catch(e){}}})();
 document.addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('keydown',e=>{if(e.key==='F12'||(e.ctrlKey&&e.shiftKey&&['i','I','j','J'].includes(e.key))||(e.ctrlKey&&['u','U'].includes(e.key))){e.preventDefault();}});
-console.log('%c⚡ Master UI v3.3 - Optimized','font-size:18px;color:#3fb950;');
+console.log('%c⚡ Master UI v3.4 - Final Perfect','font-size:18px;color:#3fb950;');
 </script>
 </body>
 </html>'''
@@ -848,7 +843,7 @@ function esc(s){if(!s)return'';return s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&
 (async()=>{let t=localStorage.getItem('mobile_token');if(t){try{let r=await fetch(`/mobile/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mobileDashboard').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},3000);}}catch(e){}}})();
 document.addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('keydown',e=>{if(e.key==='F12'||(e.ctrlKey&&e.shiftKey&&['i','I','j','J'].includes(e.key))||(e.ctrlKey&&['u','U'].includes(e.key))){e.preventDefault();}});
-console.log('%c📱 Mobile Monitor v3.3','font-size:18px;color:#3fb950;');
+console.log('%c📱 Mobile Monitor v3.4','font-size:18px;color:#3fb950;');
 </script>
 </body>
 </html>'''
@@ -876,7 +871,7 @@ if __name__ == "__main__":
     import time
     
     print("\n" + "=" * 60)
-    print("⚡ MASTER UI v3.3 - OPTIMIZED")
+    print("⚡ MASTER UI v3.4 - FINAL PERFECT")
     print("=" * 60)
     print(f"📍 Master UI:     http://localhost:9000/homepages.admin.dashboard")
     print(f"📍 Mobile:        http://localhost:9000/mobile.dashboard.administration")
