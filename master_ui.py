@@ -1,4 +1,4 @@
-# ================= MASTER UI V3.5 - FIXED PROGRESS =================
+# ================= MASTER UI V3.6 - IDEAL PERFECT =================
 import os
 import httpx
 import asyncio
@@ -15,7 +15,7 @@ from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 load_dotenv()
 
-# ================= ENCRYPTION SETUP =================
+# ================= ENCRYPTION =================
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 if not ENCRYPTION_KEY:
     ENCRYPTION_KEY = base64.urlsafe_b64encode(os.urandom(32)).decode()
@@ -119,7 +119,7 @@ def get_online_count():
     cleanup_inactive_users()
     return min(len(online_users), MAX_ONLINE_USERS)
 
-# ================= AUTH DEPENDENCIES =================
+# ================= AUTH =================
 async def get_current_user(token: Optional[str] = None) -> str:
     if not token:
         raise HTTPException(status_code=401, detail="Missing authentication token")
@@ -204,14 +204,14 @@ def save_cached_results(results: Dict[str, Dict]):
 
 BOT_SERVERS = load_servers()
 
-app = FastAPI(title="Master UI - Fixed Progress")
+app = FastAPI(title="Master UI - Ideal Perfect")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # ================= CACHE =================
 cached_results: Dict[str, Dict] = load_cached_results()
 last_fetch_time = 0
 fetch_lock = asyncio.Lock()
-CACHE_TTL = 3
+CACHE_TTL = 2  # 2 seconds for faster updates
 
 async def fetch_and_merge_results(use_encrypted: bool = True) -> List[Dict]:
     global cached_results, last_fetch_time
@@ -221,8 +221,8 @@ async def fetch_and_merge_results(use_encrypted: bool = True) -> List[Dict]:
         if now - last_fetch_time < CACHE_TTL and cached_results:
             return list(cached_results.values())
         
-        limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
-        async with httpx.AsyncClient(timeout=10, limits=limits) as client:
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=30)
+        async with httpx.AsyncClient(timeout=8, limits=limits) as client:
             tasks = []
             for server in BOT_SERVERS:
                 tasks.append(fetch_from_server(client, server, use_encrypted))
@@ -265,7 +265,7 @@ async def fetch_from_server(client, server: str, use_encrypted: bool) -> Optiona
                 res = await client.get(
                     f"{server}/results/encrypted",
                     auth=auth,
-                    timeout=8
+                    timeout=5
                 )
                 if res.status_code == 200:
                     data = res.json()
@@ -277,14 +277,14 @@ async def fetch_from_server(client, server: str, use_encrypted: bool) -> Optiona
             except:
                 pass
         
-        res = await client.get(f"{server}/results", timeout=8)
+        res = await client.get(f"{server}/results", timeout=5)
         if res.status_code == 200:
             return res.json()
     except:
         pass
     return None
 
-# ================= PROTECTED API ENDPOINTS =================
+# ================= API ENDPOINTS =================
 
 @app.get("/results")
 async def get_merged_results(token: str = Depends(get_any_user)):
@@ -333,7 +333,7 @@ async def health(token: str = Depends(get_any_user)):
                         "server": server, 
                         "status": "online",
                         "running": is_running,
-                        "processed": data.get("processed", 0),  # current_index -> processed
+                        "processed": data.get("processed", 0),
                         "total": data.get("total", 0),
                         "encryption": data.get("encryption", "enabled")
                     })
@@ -393,9 +393,9 @@ async def control_restart(server_id: int, token: str = Depends(get_current_user)
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             await client.post(f"{server}/stop")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
             await client.post(f"{server}/reset")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
             res = await client.post(f"{server}/start", content=saved_accounts)
             if res.status_code == 200:
                 return {"success": True, "message": f"Restarted {server}"}
@@ -438,7 +438,7 @@ async def get_online_count_endpoint(token: Optional[str] = None):
         update_user_activity(token)
     return {"online": get_online_count()}
 
-# ================= AUTH ENDPOINTS =================
+# ================= AUTH =================
 
 @app.post("/api/verify")
 async def verify_pin(request: Request):
@@ -487,13 +487,13 @@ async def check_live_admin_session(token: str = None):
 
 # ================= HTML PAGES =================
 
-# ===== MAIN HTML (with fixed JavaScript) =====
+# ===== MAIN HTML =====
 MAIN_HTML = '''<!DOCTYPE html>
 <html lang="hy">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Master UI v3.5</title>
+    <title>Master UI v3.6</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -589,7 +589,8 @@ MAIN_HTML = '''<!DOCTYPE html>
         .btn-secondary{background:#6e7681;color:#fff}
         .btn-danger{background:#da3633;color:#fff}
         .auto-refresh{position:fixed;bottom:20px;right:20px;background:#161b22;padding:6px 12px;border-radius:20px;font-size:10px;border:1px solid #30363d;z-index:100}
-        @media(max-width:900px){.bottom-grid{grid-template-columns:1fr}.balance-filter{margin-left:0;margin-top:8px}.filter-bar{flex-direction:column;align-items:stretch}.search-input{width:100%}.server-item{flex-direction:column;align-items:stretch}.server-controls{margin-left:0;margin-top:8px;justify-content:flex-end}}
+        .progress-text-big{font-size:13px;font-weight:700;color:#ffffff;margin-left:6px;background:#1f6feb;padding:0 10px;border-radius:12px;line-height:22px;text-shadow:0 0 10px rgba(31,111,235,0.4);}
+        @media(max-width:900px){.bottom-grid{grid-template-columns:1fr}.balance-filter{margin-left:0;margin-top:8px}.filter-bar{flex-direction:column;align-items:stretch}.search-input{width:100%}.server-item{flex-direction:column;align-items:stretch}.server-controls{margin-left:0;margin-top:8px;justify-content:flex-end}.progress-text-big{font-size:11px;padding:0 8px;}}
     </style>
 </head>
 <body>
@@ -598,8 +599,8 @@ MAIN_HTML = '''<!DOCTYPE html>
 <button onclick="verifyPin()"><i class="fas fa-unlock-alt"></i> Access</button>
 <div id="pinError" class="pin-error"></div></div></div>
 <div id="mainContent" class="main-content"><div class="container">
-<div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI v3.5 <span class="online-badge" id="onlineUsers">👤 0</span></h1>
-<div class="header-sub">🔐 Encrypted | ⭐ Pinned on top <a href="/live_administrator" target="_blank" class="live-admin-link"><i class="fas fa-eye"></i> Live Admin</a></div></div>
+<div class="header"><h1><i class="fas fa-network-wired"></i> MASTER UI v3.6 <span class="online-badge" id="onlineUsers">👤 0</span></h1>
+<div class="header-sub">⚡ Ideal Perfect | 🔐 Encrypted | ⭐ Pinned on top <a href="/live_administrator" target="_blank" class="live-admin-link"><i class="fas fa-eye"></i> Live Admin</a></div></div>
 <div class="stats-top"><div class="stat-card" onclick="setFilter('all')"><div class="stat-number" id="totalCount">0</div><div class="stat-label">TOTAL</div></div>
 <div class="stat-card" onclick="setFilter('success')"><div class="stat-number" id="successCount">0</div><div class="stat-label">✅ SUCCESS</div></div>
 <div class="stat-card" onclick="setFilter('failed')"><div class="stat-number" id="failedCount">0</div><div class="stat-label">❌ FAILED</div></div>
@@ -609,8 +610,8 @@ MAIN_HTML = '''<!DOCTYPE html>
 <div class="filter-bar"><input type="text" id="searchInput" class="search-input" placeholder="🔍 Search..."><button class="filter-btn active" data-filter="all" onclick="setFilter('all')">All</button><button class="filter-btn" data-filter="success" onclick="setFilter('success')">✅</button><button class="filter-btn" data-filter="failed" onclick="setFilter('failed')">❌</button><button class="filter-btn" data-filter="timeout" onclick="setFilter('timeout')">⏰</button><button class="refresh-btn" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button><div class="balance-filter"><span>💰</span><button class="balance-filter-btn active" data-balance="all" onclick="setBalanceFilter('all')">All</button><button class="balance-filter-btn" data-balance="low" onclick="setBalanceFilter('low')">&lt;10</button><button class="balance-filter-btn" data-balance="mid" onclick="setBalanceFilter('mid')">10-100</button><button class="balance-filter-btn" data-balance="high" onclick="setBalanceFilter('high')">100+</button></div></div>
 <div class="table-container"><table><thead><tr><th>⭐</th><th onclick="sortBy('status')">Status</th><th onclick="sortBy('username')">Username</th><th onclick="sortBy('password')">Password</th><th onclick="sortBy('balance')">Balance</th><th>Action</th></tr></thead><tbody id="resultsBody"><tr><td colspan="6" style="text-align:center;padding:40px;"><i class="fas fa-spinner fa-pulse"></i> Loading...</td></tr></tbody></table></div></div>
 <div class="bottom-grid"><div class="card"><div class="card-header"><i class="fas fa-server"></i> Bot Servers</div><div class="servers-list"><div id="serversContainer"></div><div style="display:flex;gap:8px;margin-top:10px;"><input type="text" id="newServerInput" class="search-input" placeholder="http://..." style="flex:1;"><button class="add-server-btn" onclick="addServer()"><i class="fas fa-plus"></i> Add</button></div><button class="btn btn-primary" onclick="saveServers()" style="margin-top:10px;width:100%;"><i class="fas fa-save"></i> Save & Apply</button></div><div class="button-group"><button class="btn btn-secondary" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button><button class="btn btn-danger" onclick="clearAllResults()"><i class="fas fa-trash-alt"></i> Clear</button><button class="btn btn-secondary" onclick="clearTerminal()"><i class="fas fa-trash"></i> Clear Terminal</button></div></div>
-<div class="card"><div class="terminal-header"><h3 style="font-size:13px;"><i class="fas fa-terminal"></i> Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> 🚀 Master UI v3.5 Fixed</div><div class="terminal-line"><span class="time">●</span> 📊 Progress: processed/total</div></div></div></div></div>
-<div class="auto-refresh"><i class="fas fa-clock"></i> Auto: 3s | 👤 <span id="onlineUsersSmall">0</span></div></div>
+<div class="card"><div class="terminal-header"><h3 style="font-size:13px;"><i class="fas fa-terminal"></i> Console</h3><button class="toggle-terminal-btn" onclick="toggleTerminal()"><i class="fas fa-eye-slash"></i> Hide</button></div><div class="terminal" id="terminal"><div class="terminal-line"><span class="time">●</span> ⚡ Master UI v3.6 - Ideal Perfect</div><div class="terminal-line"><span class="time">●</span> 📊 Big progress indicator | ⚡ Fast sync</div></div></div></div></div>
+<div class="auto-refresh"><i class="fas fa-clock"></i> Auto: 2s | 👤 <span id="onlineUsersSmall">0</span></div></div>
 <script>
 let allResults=[], currentFilter='all', currentBalanceFilter='all', currentSort={field:'balance',dir:'desc'};
 let refreshInterval=null, currentServers=[], authToken=null, serverStatuses={};
@@ -623,7 +624,7 @@ function toggleTerminal(){let t=document.getElementById('terminal'),b=document.q
 
 async function verifyPin(){let p=document.getElementById('pinInput').value;if(!p){document.getElementById('pinError').innerText='Enter PIN';return;}try{let r=await fetch('/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:p})});let d=await r.json();if(d.success){authToken=d.token;localStorage.setItem('master_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';initializeApp();}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
 
-function initializeApp(){loadServers();loadResults();updateServerStatuses();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateServerStatuses();updateOnline();},3000);}
+function initializeApp(){loadServers();loadResults();updateServerStatuses();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateServerStatuses();updateOnline();},2000);}
 
 async function updateOnline(){try{let r=await fetch(`/api/online?token=${authToken}`);let d=await r.json();let c=Math.min(d.online,2);document.getElementById('onlineUsers').innerHTML='👤 '+c;document.getElementById('onlineUsersSmall').innerHTML=c;}catch(e){}}
 
@@ -664,7 +665,7 @@ function renderServersList(){
         
         let progressText='';
         if(info.status==='online'&&info.total>0){
-            progressText=`<span style="font-size:10px;color:#58a6ff;margin-left:6px;">📊 ${info.processed}/${info.total}</span>`;
+            progressText=`<span class="progress-text-big">📊 ${info.processed}/${info.total}</span>`;
         }
         return`<div class="server-item">
             <input type="text" id="server_${i}" value="${esc(s)}">
@@ -683,11 +684,11 @@ function renderServersList(){
     }).join('');
 }
 
-async function startServer(i){let s=currentServers[i];if(!s)return;let a=prompt(`Accounts for ${s}\n\nFormat: username:password (one per line):`,'');if(!a)return;addLog(`Starting ${s}...`);try{let r=await fetch(`/api/control/${i}/start?token=${authToken}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accounts:a})});let d=await r.json();addLog(d.success?`Started ${s}`:`Failed: ${d.error}`);if(d.success)setTimeout(()=>updateServerStatuses(),1000);}catch(e){addLog(`Error: ${e.message}`);}}
+async function startServer(i){let s=currentServers[i];if(!s)return;let a=prompt(`Accounts for ${s}\n\nFormat: username:password (one per line):`,'');if(!a)return;addLog(`Starting ${s}...`);try{let r=await fetch(`/api/control/${i}/start?token=${authToken}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accounts:a})});let d=await r.json();addLog(d.success?`Started ${s}`:`Failed: ${d.error}`);if(d.success)setTimeout(()=>updateServerStatuses(),500);}catch(e){addLog(`Error: ${e.message}`);}}
 
-async function restartServer(i){let s=currentServers[i];if(!s)return;addLog(`Restarting ${s}...`);try{let r=await fetch(`/api/control/${i}/restart?token=${authToken}`,{method:'POST'});let d=await r.json();addLog(d.success?`Restarted ${s}`:`Failed: ${d.error}`);if(d.success){setTimeout(()=>{updateServerStatuses();loadResults();},2000);}}catch(e){addLog(`Error: ${e.message}`);}}
+async function restartServer(i){let s=currentServers[i];if(!s)return;addLog(`Restarting ${s}...`);try{let r=await fetch(`/api/control/${i}/restart?token=${authToken}`,{method:'POST'});let d=await r.json();addLog(d.success?`Restarted ${s}`:`Failed: ${d.error}`);if(d.success){setTimeout(()=>{updateServerStatuses();loadResults();},1500);}}catch(e){addLog(`Error: ${e.message}`);}}
 
-async function stopServer(i){let s=currentServers[i];if(!s)return;addLog(`Stopping ${s}...`);try{let r=await fetch(`/api/control/${i}/stop?token=${authToken}`,{method:'POST'});let d=await r.json();addLog(d.success?`Stopped ${s}`:`Failed: ${d.error}`);if(d.success)setTimeout(()=>updateServerStatuses(),1000);}catch(e){addLog(`Error: ${e.message}`);}}
+async function stopServer(i){let s=currentServers[i];if(!s)return;addLog(`Stopping ${s}...`);try{let r=await fetch(`/api/control/${i}/stop?token=${authToken}`,{method:'POST'});let d=await r.json();addLog(d.success?`Stopped ${s}`:`Failed: ${d.error}`);if(d.success)setTimeout(()=>updateServerStatuses(),500);}catch(e){addLog(`Error: ${e.message}`);}}
 
 function addServer(){let i=document.getElementById('newServerInput'),v=i.value.trim();if(v){if(!v.startsWith('http://')&&!v.startsWith('https://')){addLog('Must start with http:// or https://');return;}currentServers.push(v);i.value='';renderServersList();addLog(`Added: ${v}`);}}
 
@@ -713,13 +714,13 @@ function esc(s){if(!s)return'';return s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&
 function addLog(m){let t=document.getElementById('terminal');if(!t)return;let d=document.createElement('div');d.className='terminal-line';d.innerHTML=`<span class="time">[${new Date().toLocaleTimeString()}]</span> ${m}`;t.appendChild(d);if(t.children.length>100)t.removeChild(t.firstChild);}
 function clearTerminal(){let t=document.getElementById('terminal');if(t){t.innerHTML='';addLog('Terminal cleared');}}
 async function copyToClipboard(t,b){await navigator.clipboard.writeText(t);let o=b.innerHTML;b.innerHTML='✓';setTimeout(()=>b.innerHTML=o,1000);}
-async function retryAccount(u,b){let o=b.innerHTML;b.innerHTML='<i class="fas fa-spinner fa-pulse"></i>';b.disabled=true;addLog(`Retrying ${u}...`);try{await fetch(`/retry/${encodeURIComponent(u)}?token=${authToken}`,{method:'POST'});addLog(`Retry sent for ${u}`);setTimeout(()=>loadResults(),2000);}catch(e){addLog('Retry failed');}setTimeout(()=>{b.innerHTML=o;b.disabled=false;},3000);}
+async function retryAccount(u,b){let o=b.innerHTML;b.innerHTML='<i class="fas fa-spinner fa-pulse"></i>';b.disabled=true;addLog(`Retrying ${u}...`);try{await fetch(`/retry/${encodeURIComponent(u)}?token=${authToken}`,{method:'POST'});addLog(`Retry sent for ${u}`);setTimeout(()=>loadResults(),1500);}catch(e){addLog('Retry failed');}setTimeout(()=>{b.innerHTML=o;b.disabled=false;},3000);}
 document.addEventListener('input',function(e){if(e.target&&e.target.id==='searchInput')renderResults();});
 document.addEventListener('keypress',function(e){if(e.target&&e.target.id==='pinInput'&&e.key==='Enter')verifyPin();});
 (async()=>{let t=localStorage.getItem('master_token');if(t){try{let r=await fetch(`/api/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';initializeApp();}}catch(e){}}})();
 document.addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('keydown',e=>{if(e.key==='F12'||(e.ctrlKey&&e.shiftKey&&['i','I','j','J'].includes(e.key))||(e.ctrlKey&&['u','U'].includes(e.key))){e.preventDefault();}});
-console.log('%c⚡ Master UI v3.5 - Progress Fixed','font-size:18px;color:#3fb950;');
+console.log('%c⚡ Master UI v3.6 - Ideal Perfect','font-size:18px;color:#3fb950;');
 </script>
 </body>
 </html>'''
@@ -800,13 +801,13 @@ LIVE_ADMIN_HTML = '''<!DOCTYPE html>
     <button class="refresh-btn" onclick="manualRefresh()"><i class="fas fa-sync-alt"></i> Refresh</button></div>
     <div class="filter-bar"><input type="text" id="searchInput" class="search-input" placeholder="🔍 Search..." oninput="filterResults()">
     <button class="refresh-btn" onclick="loadResults()"><i class="fas fa-sync-alt"></i> Refresh</button>
-    <span class="autorefresh-info"><i class="fas fa-clock"></i> Auto: 3s</span></div>
+    <span class="autorefresh-info"><i class="fas fa-clock"></i> Auto: 2s</span></div>
     <div class="accounts-grid" id="accountsGrid"><div class="no-results"><i class="fas fa-spinner fa-pulse"></i><div>Loading...</div></div></div></div>
     <div class="footer"><i class="fas fa-chart-line"></i> <span id="footerCount">0</span> accounts | <i class="fas fa-lock"></i> Passwords hidden</div>
 </div></div>
 <script>
 let liveResults=[], authToken=null, refreshInterval=null;
-async function verifyPin(){let p=document.getElementById('pinInput').value;if(!p){document.getElementById('pinError').innerText='Enter PIN';return;}try{let r=await fetch('/live/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:p})});let d=await r.json();if(d.success){authToken=d.token;localStorage.setItem('live_admin_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},3000);}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
+async function verifyPin(){let p=document.getElementById('pinInput').value;if(!p){document.getElementById('pinError').innerText='Enter PIN';return;}try{let r=await fetch('/live/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:p})});let d=await r.json();if(d.success){authToken=d.token;localStorage.setItem('live_admin_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},2000);}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
 async function loadResults(){try{let r=await fetch('/results/public');if(r.ok){liveResults=await r.json();renderResults();updateStats();document.getElementById('lastUpdate').innerHTML='🕐 '+new Date().toLocaleTimeString();}else{document.getElementById('accountsGrid').innerHTML='<div class="no-results"><i class="fas fa-exclamation-triangle" style="color:#f85149;"></i><div style="color:#f85149;">Error loading</div></div>';}}catch(e){}}
 async function updateOnline(){try{let r=await fetch('/api/online');let d=await r.json();document.getElementById('onlineUsers').innerHTML='👤 '+d.online;}catch(e){}}
 function renderResults(){let g=document.getElementById('accountsGrid'), s=document.getElementById('searchInput').value.toLowerCase();let f=liveResults;if(s)f=f.filter(r=>r.username.toLowerCase().includes(s));f.sort((a,b)=>(parseFloat(b.balance_value)||0)-(parseFloat(a.balance_value)||0));if(!f.length){g.innerHTML='<div class="no-results"><i class="fas fa-inbox"></i><div>No results</div></div>';return;}let bc=v=>{let n=parseFloat(v)||0;return n>100?'balance-positive':n>10?'balance-medium':'balance-zero';};g.innerHTML=f.map(a=>`<div class="account-card"><div class="card-header"><span class="username"><i class="fas fa-user-circle" style="margin-right:6px;color:#58a6ff;"></i>${esc(a.username)}</span><span class="status-badge">${a.status}</span></div><div class="card-body"><div class="balance-label"><i class="fas fa-coins"></i> Balance</div><div class="balance ${bc(a.balance_value)}">${a.balance||'0 ֏'}</div><div style="margin-top:8px;"><button class="copy-btn" onclick="copyToClipboard('${esc(a.username)}')"><i class="fas fa-copy"></i> Copy</button></div></div></div>`).join('');}
@@ -815,7 +816,7 @@ function filterResults(){renderResults();}
 function manualRefresh(){loadResults();updateOnline();}
 function copyToClipboard(t){navigator.clipboard.writeText(t);}
 function esc(s){if(!s)return'';return String(s).replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]);}
-(async()=>{let t=localStorage.getItem('live_admin_token');if(t){try{let r=await fetch(`/live/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},3000);}}catch(e){}}})();
+(async()=>{let t=localStorage.getItem('live_admin_token');if(t){try{let r=await fetch(`/live/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mainContent').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},2000);}}catch(e){}}})();
 document.addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('keydown',e=>{if(e.key==='F12'||(e.ctrlKey&&e.shiftKey&&['i','I','j','J'].includes(e.key))||(e.ctrlKey&&['u','U'].includes(e.key))){e.preventDefault();}});
 console.log('%c🔒 Live Admin - Protected','font-size:18px;color:#3fb950;');
@@ -872,28 +873,28 @@ MOBILE_HTML = '''<!DOCTYPE html>
 <div id="mobileDashboard" class="mobile-dashboard"><div class="header"><h1><i class="fas fa-mobile-alt"></i> Mobile Monitor</h1><div class="last-update" id="lastUpdate">Loading... <span class="online-badge" id="onlineUsers">👤 0</span></div></div>
 <div class="toolbar"><button class="refresh-btn" onclick="loadResults()"><i class="fas fa-sync-alt"></i> Refresh</button></div>
 <div class="accounts-list" id="accountsList"><div style="text-align:center;padding:30px;"><i class="fas fa-spinner fa-pulse"></i> Loading...</div></div>
-<div class="footer"><i class="fas fa-chart-line"></i> Auto 3s | ⭐ Pinned on top | 🔐 Encrypted</div></div>
+<div class="footer"><i class="fas fa-chart-line"></i> Auto 2s | ⭐ Pinned on top | 🔐 Encrypted</div></div>
 <script>
 let mobileResults=[], authToken=null, refreshInterval=null;
 let pinnedAccounts=JSON.parse(localStorage.getItem('mobile_pinned')||'[]');
 function savePinned(){localStorage.setItem('mobile_pinned',JSON.stringify(pinnedAccounts));}
 function togglePin(u){let i=pinnedAccounts.indexOf(u);i===-1?pinnedAccounts.push(u):pinnedAccounts.splice(i,1);savePinned();renderList();}
 function isPinned(u){return pinnedAccounts.includes(u);}
-async function verifyPin(){let p=document.getElementById('pinInput').value;if(!p){document.getElementById('pinError').innerText='Enter PIN';return;}try{let r=await fetch('/mobile/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:p})});let d=await r.json();if(d.success){authToken=d.token;localStorage.setItem('mobile_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('mobileDashboard').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},3000);}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
+async function verifyPin(){let p=document.getElementById('pinInput').value;if(!p){document.getElementById('pinError').innerText='Enter PIN';return;}try{let r=await fetch('/mobile/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:p})});let d=await r.json();if(d.success){authToken=d.token;localStorage.setItem('mobile_token',authToken);document.getElementById('pinOverlay').style.display='none';document.getElementById('mobileDashboard').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},2000);}else{document.getElementById('pinError').innerText='Invalid PIN';document.getElementById('pinInput').value='';}}catch(e){document.getElementById('pinError').innerText='Connection error';}}
 async function updateOnline(){try{let r=await fetch(`/api/online?token=${authToken}`);let d=await r.json();let c=Math.min(d.online,2);document.getElementById('onlineUsers').innerHTML='👤 '+c;}catch(e){}}
 async function loadResults(){try{let r=await fetch(`/results?token=${authToken}`);if(r.ok){let d=await r.json();mobileResults=d;renderList();document.getElementById('lastUpdate').innerHTML='Last: '+new Date().toLocaleTimeString();}else if(r.status===401){document.getElementById('accountsList').innerHTML='<div style="text-align:center;padding:30px;color:#f85149;"><i class="fas fa-lock"></i> Session expired</div>';}}catch(e){}}
 function renderList(){let c=document.getElementById('accountsList');let s=[...mobileResults].sort((a,b)=>{let aP=isPinned(a.username)?0:1,bP=isPinned(b.username)?0:1;if(aP!==bP)return aP-bP;return(parseFloat(b.balance_value)||0)-(parseFloat(a.balance_value)||0);});if(!s.length){c.innerHTML='<div style="text-align:center;padding:30px;"><i class="fas fa-inbox"></i> No results</div>';return;}let bc=v=>{let n=parseFloat(v)||0;return n>100?'balance-positive':n>10?'balance-medium':'balance-zero';};c.innerHTML=s.map(a=>`<div class="account-card"><div class="account-row"><div><span class="status-badge">${a.status}</span><span class="username-value">${esc(a.username)}</span><button class="copy-btn" onclick="copyToClipboard('${esc(a.username)}')"><i class="fas fa-copy"></i></button><button class="pin-star ${isPinned(a.username)?'active':''}" onclick="togglePin('${esc(a.username)}')"><i class="fas fa-star"></i></button></div></div><div class="account-row"><div><div class="label"><i class="fas fa-key"></i> Password</div><div class="password-value">${esc(a.password)}<button class="copy-btn" onclick="copyToClipboard('${esc(a.password)}')"><i class="fas fa-copy"></i></button></div></div></div><div class="account-row"><div><div class="label"><i class="fas fa-coins"></i> Balance</div><div class="balance-value ${bc(a.balance_value)}">${a.balance||'0 ֏'}</div></div></div>${a.error?`<div class="account-row"><div class="error-text"><i class="fas fa-exclamation-triangle"></i> ${esc(a.error)}</div></div>`:''}</div>`).join('');}
 function copyToClipboard(t){navigator.clipboard.writeText(t);}
 function esc(s){if(!s)return'';return s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]);}
-(async()=>{let t=localStorage.getItem('mobile_token');if(t){try{let r=await fetch(`/mobile/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mobileDashboard').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},3000);}}catch(e){}}})();
+(async()=>{let t=localStorage.getItem('mobile_token');if(t){try{let r=await fetch(`/mobile/check?token=${t}`);let d=await r.json();if(d.authenticated){authToken=t;document.getElementById('pinOverlay').style.display='none';document.getElementById('mobileDashboard').style.display='block';loadResults();updateOnline();refreshInterval=setInterval(()=>{loadResults();updateOnline();},2000);}}catch(e){}}})();
 document.addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('keydown',e=>{if(e.key==='F12'||(e.ctrlKey&&e.shiftKey&&['i','I','j','J'].includes(e.key))||(e.ctrlKey&&['u','U'].includes(e.key))){e.preventDefault();}});
-console.log('%c📱 Mobile Monitor v3.5','font-size:18px;color:#3fb950;');
+console.log('%c📱 Mobile Monitor v3.6','font-size:18px;color:#3fb950;');
 </script>
 </body>
 </html>'''
 
-# ================= MAIN ROUTES =================
+# ================= ROUTES =================
 
 @app.get("/")
 async def root():
@@ -916,7 +917,7 @@ if __name__ == "__main__":
     import time
     
     print("\n" + "=" * 60)
-    print("⚡ MASTER UI v3.5 - PROGRESS FIXED")
+    print("⚡ MASTER UI v3.6 - IDEAL PERFECT")
     print("=" * 60)
     print(f"📍 Master UI:     http://localhost:9000/homepages.admin.dashboard")
     print(f"📍 Mobile:        http://localhost:9000/mobile.dashboard.administration")
@@ -926,8 +927,8 @@ if __name__ == "__main__":
     print(f"🔐 Mobile PIN:    {MOBILE_PIN}")
     print(f"🔐 Live PIN:      {LIVE_ADMIN_PIN}")
     print(f"👤 Online Users:  MAX 2")
-    print(f"⚡ Cache TTL:     3 seconds")
-    print(f"📊 Progress:      processed/total")
+    print(f"⚡ Cache TTL:     2 seconds")
+    print(f"📊 Progress:      BIG WHITE indicator")
     print("=" * 60 + "\n")
     
     uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")
